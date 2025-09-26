@@ -1,9 +1,9 @@
-#include "src/FeatureDetector.hpp"
-#include "src/FeatureMatcher.hpp"
-#include "src/HomographyEstimator.hpp"
-#include "src/PanoramaStitcher.hpp"
-#include "src/Evaluator.hpp"
-#include "src/ImageWarper.hpp"
+#include "FeatureDetector.hpp"
+#include "FeatureMatcher.hpp"
+#include "HomographyEstimator.hpp"
+#include "PanoramaStitcher.hpp"
+#include "Evaluator.hpp"
+#include "ImageWarper.hpp"
 #include <opencv2/opencv.hpp>
 #include <opencv2/stitching.hpp>
 #include <iostream>
@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <ctime>
 #include <sstream>
+#include <fstream>
 
 using namespace std;
 
@@ -38,6 +39,78 @@ static std::string resolveBaseOutputDir(const std::string& user_output_dir) {
     }
     auto root = findProjectRoot();
     return (root / base).string();
+}
+
+static void writeParametersReference(const std::string& dir) {
+    std::filesystem::create_directories(dir);
+    std::ofstream f(dir + "/PARAMETERS.md");
+    if (!f.is_open()) return;
+    f << "# Parameters Reference\n\n";
+    f << "- `--experiment`: Run experiment sweep over detector/matcher/blending/RANSAC thresholds.\n";
+    f << "- `--detector <SIFT|ORB|AKAZE>`: Feature detector/descriptor. Affects keypoint count and descriptor type.\n";
+    f << "- `--matcher <BF|ANN>`: Descriptor matcher (ANN = approximate nearest neighbor).\n";
+    f << "  - Float descriptors (e.g., SIFT): ANN uses FLANN KD-tree.\n";
+    f << "  - Binary descriptors (e.g., ORB/AKAZE): ANN uses FLANN LSH; BF uses Hamming.\n";
+    f << "- `--blending <OVERLAY|FEATHER|MULTIBAND>`: Panorama blending backend (OpenCV detail blenders).\n";
+    f << "  - OVERLAY: simple overwrite; FEATHER: soft seam via weights; MULTIBAND: pyramid blending for complex seams.\n";
+    f << "- `--threshold <float>`: RANSAC reprojection threshold (pixels). Lower is stricter (fewer, cleaner inliers).\n";
+    f << "- `--warper <NONE|CYLINDRICAL|SPHERICAL>`: Optional pre‑warping for rotation panoramas.\n";
+    f << "- `--focal <float>`: Focal length in pixels for warper. Controls projection scale/curvature.\n";
+    f << "- `--output <dir>`: Base output directory (anchored to project root if relative).\n";
+    f << "\nInternal (not CLI by default):\n";
+    f << "- Lowe's ratio threshold (default 0.80): filters ambiguous matches (FeatureMatcher).\n";
+    f << "- Homography RANSAC confidence/max iterations: see HomographyEstimator defaults.\n";
+    f.close();
+}
+
+static void writeSimpleRunConfig(const std::string& dir,
+                                 DetectorType det,
+                                 MatcherType mat,
+                                 BlendingType blend,
+                                 WarperType warper,
+                                 double focal,
+                                 double thr,
+                                 const std::vector<std::string>& images) {
+    std::filesystem::create_directories(dir);
+    std::ofstream f(dir + "/RUN_CONFIG.txt");
+    if (!f.is_open()) return;
+    f << "detector=" << FeatureDetector::detectorTypeToString(det) << "\n";
+    f << "matcher=" << FeatureMatcher::matcherTypeToString(mat) << "\n";
+    f << "blending=" << PanoramaStitcher::blendingTypeToString(blend) << "\n";
+    f << "warper=" << ImageWarper::warperTypeToString(warper) << "\n";
+    f << "focal=" << focal << "\n";
+    f << "ransac_threshold=" << thr << "\n";
+    f << "images=";
+    for (size_t i = 0; i < images.size(); ++i) {
+        if (i) f << ",";
+        f << images[i];
+    }
+    f << "\n";
+    f.close();
+    writeParametersReference(dir);
+}
+
+static void writeExperimentRunConfig(const std::string& dir,
+                                     const ExperimentConfig& cfg,
+                                     const std::vector<std::string>& image_paths) {
+    std::filesystem::create_directories(dir);
+    std::ofstream f(dir + "/RUN_CONFIG.txt");
+    if (!f.is_open()) return;
+    auto join = [](const std::vector<std::string>& v) {
+        std::ostringstream os; for (size_t i=0;i<v.size();++i){ if(i) os<<","; os<<v[i]; } return os.str(); };
+    std::vector<std::string> dets; for (auto d: cfg.detector_types) dets.push_back(FeatureDetector::detectorTypeToString(d));
+    std::vector<std::string> mats; for (auto m: cfg.matcher_types) mats.push_back(FeatureMatcher::matcherTypeToString(m));
+    std::vector<std::string> blends; for (auto b: cfg.blending_types) blends.push_back(PanoramaStitcher::blendingTypeToString(b));
+
+    f << "detectors=" << join(dets) << "\n";
+    f << "matchers=" << join(mats) << "\n";
+    f << "blendings=" << join(blends) << "\n";
+    f << "ransac_thresholds="; for (size_t i=0;i<cfg.reprojection_thresholds.size();++i){ if(i) f<<","; f<<cfg.reprojection_thresholds[i]; } f << "\n";
+    f << "save_intermediate_results=" << (cfg.save_intermediate_results?"true":"false") << "\n";
+    f << "save_visualizations=" << (cfg.save_visualizations?"true":"false") << "\n";
+    f << "images="; for (size_t i=0;i<image_paths.size();++i){ if(i) f<<","; f<<image_paths[i]; } f << "\n";
+    f.close();
+    writeParametersReference(dir);
 }
 
 static bool runOpenCVStitcherBaseline(const std::vector<cv::Mat>& images, cv::Mat& pano) {
@@ -72,9 +145,9 @@ static bool runOpenCVStitcherBaseline(const std::vector<cv::Mat>& images, cv::Ma
 void printUsage(const char* program_name) {
     cout << "Usage: " << program_name << " [options] img1 img2 [img3 ...]" << endl;
     cout << "Options:" << endl;
-    cout << "  --experiment     Run full experimental evaluation" << endl;
+    cout << "  --experiment     Run full experimental evaluation (simple mode disabled)" << endl;
     cout << "  --detector <type>   Detector type: SIFT, ORB, AKAZE (default: SIFT)" << endl;
-    cout << "  --matcher <type>    Matcher type: BF, FLANN (default: BF)" << endl;
+    cout << "  --matcher <type>    Matcher type: BF, ANN (default: BF)" << endl;
     cout << "  --blending <type>   Blending type: OVERLAY, FEATHER, MULTIBAND (default: FEATHER)" << endl;
     cout << "  --warper <type>     Warper: NONE, CYLINDRICAL, SPHERICAL (default: NONE)" << endl;
     cout << "  --focal <val>       Warper focal length in pixels (default: 0.5*width)" << endl;
@@ -93,7 +166,7 @@ DetectorType parseDetectorType(const string& str) {
 
 MatcherType parseMatcherType(const string& str) {
     if (str == "BF") return MatcherType::BRUTE_FORCE;
-    if (str == "FLANN") return MatcherType::FLANN;
+    if (str == "FLANN" || str == "ANN") return MatcherType::FLANN; // ANN alias for FLANN backend
     cout << "Warning: Unknown matcher type '" << str << "', using BF" << endl;
     return MatcherType::BRUTE_FORCE;
 }
@@ -133,7 +206,8 @@ void runExperimentMode(const vector<string>& image_paths, const string& output_d
 
     ExperimentConfig config;
     config.detector_types = {DetectorType::SIFT, DetectorType::ORB, DetectorType::AKAZE};
-    config.matcher_types = {MatcherType::BRUTE_FORCE, MatcherType::FLANN};
+    // Focus experiments on detector, RANSAC threshold, and blending; use BF matcher only
+    config.matcher_types = {MatcherType::BRUTE_FORCE};
     config.blending_types = {BlendingType::SIMPLE_OVERLAY, BlendingType::FEATHERING};
     config.reprojection_thresholds = {0.5, 1.0, 2.0, 3.0, 5.0};
     config.output_dir = run_dir; // ensure all experiment artifacts go under experiments/timestamp
@@ -151,7 +225,13 @@ void runExperimentMode(const vector<string>& image_paths, const string& output_d
             continue;
         }
 
-        string experiment_name = "pair_" + to_string(i) + "_" + to_string(i + 1);
+        // Use image file stems as experiment name, e.g., imgA_imgB
+        std::string stem1 = std::filesystem::path(image_paths[i]).stem().string();
+        std::string stem2 = std::filesystem::path(image_paths[i + 1]).stem().string();
+        // Sanitize: replace spaces with dashes (basic)
+        std::replace(stem1.begin(), stem1.end(), ' ', '-');
+        std::replace(stem2.begin(), stem2.end(), ' ', '-');
+        string experiment_name = stem1 + "_" + stem2;
         evaluator.runExperiments(img1, img2, experiment_name);
 
         // Baseline outputs (my default pipeline vs OpenCV Stitcher) per pair
@@ -200,6 +280,7 @@ void runExperimentMode(const vector<string>& image_paths, const string& output_d
         }
     }
 
+    writeExperimentRunConfig(run_dir, config, image_paths);
     evaluator.saveResults(run_dir + std::string("/experimental_results.csv"));
     evaluator.saveResultsAsTable(run_dir + std::string("/results_table.txt"));
     evaluator.generateReport(run_dir + std::string("/experiment_report.md"));
@@ -298,12 +379,31 @@ void runSimpleMode(const vector<string>& image_paths, DetectorType detector_type
     #endif
         std::ostringstream oss;
         oss << std::put_time(&tm_local, "%Y%m%d-%H%M%S");
-        std::string base_dir = resolveBaseOutputDir(output_dir);
-        std::string run_dir = base_dir + "/simple/" + oss.str();
-        filesystem::create_directories(run_dir);
+    std::string base_dir = resolveBaseOutputDir(output_dir);
+    std::string run_dir = base_dir + "/simple/" + oss.str();
+    filesystem::create_directories(run_dir);
+    writeSimpleRunConfig(run_dir, detector_type, matcher_type, blending_type, warper_type, focal, threshold, image_paths);
+        // Always save the user-selected blend as my_panorama.jpg
         string my_output_path = run_dir + "/my_panorama.jpg";
         cv::imwrite(my_output_path, global_res.panorama);
         cout << "My panorama saved to: " << my_output_path << endl;
+
+        // If more than 2 images, also output all three blending variants for side-by-side comparison
+        if (proc_images.size() > 2) {
+            std::vector<std::pair<BlendingType, std::string>> blends = {
+                {BlendingType::SIMPLE_OVERLAY, "overlay"},
+                {BlendingType::FEATHERING, "feather"},
+                {BlendingType::MULTIBAND, "multiband"}
+            };
+            for (const auto& b : blends) {
+                PanoramaStitcher comp_stitcher(b.first);
+                auto res = comp_stitcher.stitchImagesGlobal(proc_images, T_to_ref);
+                if (res.success) {
+                    std::string outp = run_dir + "/my_panorama_" + b.second + ".jpg";
+                    cv::imwrite(outp, res.panorama);
+                }
+            }
+        }
         // Compute OpenCV baseline (uses original images)
         cv::Mat cv_panorama;
         try {
@@ -379,11 +479,11 @@ int main(int argc, char** argv) {
     }
 
     try {
-        if (experiment_mode) {
-            runExperimentMode(image_paths, output_dir);
-        } else {
-            runSimpleMode(image_paths, detector_type, matcher_type, blending_type, threshold, output_dir, warper_type, focal);
+        // Only experiment mode is supported now. If --experiment is not set, still run experiments.
+        if (!experiment_mode) {
+            cout << "[Info] Simple mode is disabled. Running experiment mode instead." << endl;
         }
+        runExperimentMode(image_paths, output_dir);
     } catch (const exception& e) {
         cerr << "Error: " << e.what() << endl;
         return -1;

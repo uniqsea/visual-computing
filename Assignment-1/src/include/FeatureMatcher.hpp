@@ -3,7 +3,6 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/features2d.hpp>
 #include <vector>
-#include <chrono>
 
 enum class MatcherType {
     BRUTE_FORCE,
@@ -28,7 +27,7 @@ private:
     double ratio_threshold_;
 
 public:
-    FeatureMatcher(MatcherType type, double ratio_threshold = 0.75);
+    FeatureMatcher(MatcherType type, double ratio_threshold = 0.8);
     ~FeatureMatcher() = default;
 
     MatchingResult matchFeatures(const cv::Mat& descriptors1, const cv::Mat& descriptors2);
