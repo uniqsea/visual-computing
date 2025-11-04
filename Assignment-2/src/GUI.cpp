@@ -1,6 +1,10 @@
 #include "GUI.h"
+#define GL_SILENCE_DEPRECATION
+#include <OpenGL/gl3.h>
+#include <GLFW/glfw3.h>
 #include "transforms/AffineTransform.h"
 #include "utils/PerformanceLogger.h"
+#include "utils/PerformanceEvaluation.h"
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
@@ -27,6 +31,32 @@ bool GUI::initialize(GLFWwindow* window) {
     
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding = 10.0f;
+    style.FrameRounding = 7.0f;
+    style.GrabRounding = 7.0f;
+    style.WindowPadding = ImVec2(18.0f, 18.0f);
+    style.FramePadding = ImVec2(12.0f, 8.0f);
+    style.ItemSpacing = ImVec2(12.0f, 10.0f);
+    style.ScrollbarSize = 14.0f;
+    
+    ImVec4* colors = style.Colors;
+    colors[ImGuiCol_WindowBg]        = ImVec4(0.10f, 0.11f, 0.14f, 0.95f);
+    colors[ImGuiCol_Header]          = ImVec4(0.20f, 0.39f, 0.58f, 1.00f);
+    colors[ImGuiCol_HeaderHovered]   = ImVec4(0.26f, 0.51f, 0.73f, 1.00f);
+    colors[ImGuiCol_HeaderActive]    = ImVec4(0.30f, 0.55f, 0.80f, 1.00f);
+    colors[ImGuiCol_Button]          = ImVec4(0.20f, 0.37f, 0.57f, 1.00f);
+    colors[ImGuiCol_ButtonHovered]   = ImVec4(0.26f, 0.51f, 0.73f, 1.00f);
+    colors[ImGuiCol_ButtonActive]    = ImVec4(0.30f, 0.58f, 0.82f, 1.00f);
+    colors[ImGuiCol_FrameBg]         = ImVec4(0.17f, 0.21f, 0.28f, 1.00f);
+    colors[ImGuiCol_FrameBgHovered]  = ImVec4(0.26f, 0.36f, 0.49f, 1.00f);
+    colors[ImGuiCol_FrameBgActive]   = ImVec4(0.29f, 0.46f, 0.67f, 1.00f);
+    colors[ImGuiCol_SliderGrab]      = ImVec4(0.34f, 0.60f, 0.86f, 1.00f);
+    colors[ImGuiCol_SliderGrabActive]= ImVec4(0.42f, 0.71f, 0.97f, 1.00f);
+    colors[ImGuiCol_CheckMark]       = ImVec4(0.70f, 0.88f, 1.00f, 1.00f);
+    colors[ImGuiCol_TitleBg]         = ImVec4(0.11f, 0.15f, 0.21f, 1.00f);
+    colors[ImGuiCol_TitleBgActive]   = ImVec4(0.16f, 0.27f, 0.40f, 1.00f);
+    colors[ImGuiCol_PopupBg]         = ImVec4(0.09f, 0.10f, 0.13f, 0.94f);
     
     // Setup Platform/Renderer backends
     const char* glsl_version = "#version 330";
@@ -66,28 +96,47 @@ void GUI::render() {
 
 void GUI::drawControlPanel(FilterManager& filterManager, 
                           AffineTransform& transform,
-                          PerformanceLogger& perfLogger) {
-    ImGui::Begin("Real-time Video Processing", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                          PerformanceLogger& perfLogger,
+                          PerformanceBenchmark& benchmark) {
+    // Anchor control panel to the right side of the window
+    ImGuiIO& io_for_layout = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io_for_layout.DisplaySize.x - panelWidth, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, io_for_layout.DisplaySize.y), ImGuiCond_Always);
+
+    ImGuiWindowFlags dockFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize;
+    ImGui::Begin("Real-time Video Processing", nullptr, dockFlags);
+    
+    const ImVec4 accent = ImVec4(0.66f, 0.85f, 1.00f, 1.00f);
     
     // FPS Display
-    ImGui::Text("FPS: %.1f (%.2f ms/frame)", state.currentFPS, 1000.0f / state.currentFPS);
+    ImGui::TextColored(accent, "Performance");
+    ImGui::SameLine();
+    if (benchmark.getState() == BenchmarkState::Idle) {
+        if (ImGui::Button("Start Evaluation")) {
+            state.startBenchmarkRequested = true;
+        }
+    }
+    ImGui::Spacing();
+    ImGui::Text("FPS: %.1f", state.currentFPS);
+    ImGui::Text("Frame Time: %.2f ms", state.currentFrameTimeMs);
     ImGui::Text("Build Mode: %s", buildMode.c_str());
     ImGui::Separator();
     
     // Filter Selection
-    ImGui::Text("Filter Selection");
-    const char* filterNames[] = { "None", "Pixelation", "Cartoon" };
+    ImGui::TextColored(accent, "Filters");
+    const char* filterNames[] = { "None", "Pixelation", "Comic Art", "OilPainting" };
     int currentFilter = static_cast<int>(state.selectedFilter);
-    if (ImGui::Combo("Filter", &currentFilter, filterNames, 3)) {
+    if (ImGui::Combo("##filter_combo", &currentFilter, filterNames, 4)) {
         state.selectedFilter = static_cast<FilterType>(currentFilter);
         filterManager.setCurrentFilter(state.selectedFilter);
     }
     
     // Processing Mode
-    ImGui::Text("Processing Mode");
+    ImGui::Spacing();
+    ImGui::TextColored(accent, "Backend");
     const char* modeNames[] = { "CPU", "GPU" };
     int currentMode = (state.processingMode == ProcessingMode::CPU) ? 0 : 1;
-    if (ImGui::Combo("Mode", &currentMode, modeNames, 2)) {
+    if (ImGui::Combo("##processing_mode_combo", &currentMode, modeNames, 2)) {
         state.processingMode = (currentMode == 0) ? ProcessingMode::CPU : ProcessingMode::GPU;
         filterManager.setProcessingMode(state.processingMode);
     }
@@ -97,27 +146,49 @@ void GUI::drawControlPanel(FilterManager& filterManager,
     // Filter Parameters
     if (state.selectedFilter == FilterType::Pixelation) {
         ImGui::Text("Pixelation Parameters");
-        if (ImGui::SliderInt("Block Size", &state.pixelationBlockSize, 2, 50)) {
+        if (ImGui::SliderInt("Block Size", &state.pixelationBlockSize, 1, 50)) {
             if (auto* filter = dynamic_cast<PixelationFilter*>(filterManager.getCurrentFilter())) {
                 filter->setBlockSize(state.pixelationBlockSize);
             }
         }
     } else if (state.selectedFilter == FilterType::Cartoon) {
-        ImGui::Text("Cartoon Parameters");
-        ImGui::SliderFloat("Edge Threshold", &state.cartoonEdgeThreshold, 10.0f, 200.0f);
+        ImGui::Text("Comic Art Parameters");
+        if (ImGui::SliderFloat("Edge Threshold", &state.cartoonEdgeThreshold, 10.0f, 100.0f)) {
+            if (auto* filter = dynamic_cast<CartoonFilter*>(filterManager.getCurrentFilter())) {
+                filter->setParameter("edgeThreshold", state.cartoonEdgeThreshold);
+            }
+        }
+    } else if (state.selectedFilter == FilterType::OilPainting) {
+        ImGui::Text("Oil Painting Parameters");
+        if (ImGui::SliderInt("Brush Radius", &state.oilPaintingRadius, 1, 10)) {
+            if (auto* filter = dynamic_cast<OilPaintingFilter*>(filterManager.getCurrentFilter())) {
+                filter->setParameter("radius", static_cast<float>(state.oilPaintingRadius));
+            }
+        }
+        // Intensity removed: single-parameter (Brush Radius) design
     }
     
     ImGui::Separator();
     
     // Resolution Selection
-    ImGui::Text("Resolution");
+    ImGui::Spacing();
+    ImGui::TextColored(accent, "Resolution");
     const char* resolutions[] = { "640x480", "1280x720", "1920x1080" };
-    ImGui::Combo("Resolution", &state.selectedResolution, resolutions, 3);
+    ImGui::Combo("##resolution_combo", &state.selectedResolution, resolutions, 3);
+    
+    ImGui::Separator();
+    
+    // Display Options
+    ImGui::Spacing();
+    ImGui::TextColored(accent, "Display");
+    ImGui::Checkbox("Mirror Preview", &state.mirrorPreview);
+    // Six-view grid removed to restore single-view rendering
     
     ImGui::Separator();
     
     // Geometric Transform
-    ImGui::Text("Geometric Transform");
+    ImGui::Spacing();
+    ImGui::TextColored(accent, "Geometric Transform");
     ImGui::Checkbox("Enable Transform", &state.transformEnabled);
     
     if (state.transformEnabled) {
@@ -139,33 +210,48 @@ void GUI::drawControlPanel(FilterManager& filterManager,
     
     ImGui::Separator();
     
-    // Performance Logging
-    ImGui::Text("Performance Logging");
-    if (ImGui::Button("Export Performance Data")) {
-        perfLogger.exportToCSV();
+    // Inline performance evaluation status (no separate section)
+    BenchmarkState benchmarkState = benchmark.getState();
+    if (benchmarkState == BenchmarkState::Warmup) {
+        ImGui::Text("Warming up...");
+        double elapsed = benchmark.getPhaseElapsedTime();
+        double total = benchmark.getPhaseTotalTime();
+        float progress = static_cast<float>(elapsed / total);
+        ImGui::ProgressBar(progress, ImVec2(-1, 0));
+        ImGui::Text("%.1f / %.1f seconds", elapsed, total);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "GUI will be hidden in Recording");
+    } else if (benchmarkState == BenchmarkState::Recording) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "RECORDING");
+        double elapsed = benchmark.getPhaseElapsedTime();
+        double total = benchmark.getPhaseTotalTime();
+        float progress = static_cast<float>(elapsed / total);
+        ImGui::ProgressBar(progress, ImVec2(-1, 0));
+        ImGui::Text("%.1f / %.1f seconds", elapsed, total);
+        ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.2f, 1.0f), "GUI hidden for pure pipeline timing");
+    } else if (benchmarkState == BenchmarkState::Complete) {
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "Evaluation Complete");
+        if (benchmark.hasResult()) {
+            BenchmarkResult result = benchmark.getResult();
+            ImGui::Text("Averages (ms)");
+            ImGui::BulletText("Frame Time (end-to-end): %.2f ms", result.frameTimeAvgMs);
+            ImGui::BulletText("Algorithm Time: %.2f ms", result.algoTimeAvgMs);
+            ImGui::BulletText("Samples: %d", result.sampleCount);
+        }
+        if (ImGui::Button("Reset")) {
+            benchmark.reset();
+        }
     }
-    ImGui::SameLine();
-    ImGui::Text("Entries: %zu", perfLogger.getEntryCount());
-    
-    if (ImGui::Button("Clear Performance Data")) {
-        perfLogger.clear();
-    }
-    
-    ImGui::Separator();
-    
-    // Demo Window Toggle
-    ImGui::Checkbox("Show ImGui Demo", &state.showDemoWindow);
     
     ImGui::End();
-    
-    // Show demo window if enabled
-    if (state.showDemoWindow) {
-        ImGui::ShowDemoWindow(&state.showDemoWindow);
-    }
 }
 
 void GUI::updateFPS(float fps) {
     state.currentFPS = fps;
+}
+
+void GUI::updateFrameTime(float frameTimeMs) {
+    state.currentFrameTimeMs = frameTimeMs;
 }
 
 bool GUI::wantsMouseInput() const {
@@ -177,4 +263,3 @@ bool GUI::wantsKeyboardInput() const {
     ImGuiIO& io = ImGui::GetIO();
     return io.WantCaptureKeyboard;
 }
-

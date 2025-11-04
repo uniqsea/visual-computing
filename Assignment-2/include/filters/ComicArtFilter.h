@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Filter.h"
+#include "filters/Filter.h"
 
 class CartoonFilter : public Filter {
 public:
@@ -9,7 +9,7 @@ public:
     void applyCPU(cv::Mat& frame) override;
     void applyGPU(ShaderProgram& shader) override;
     
-    std::string getName() const override { return "Cartoon"; }
+    std::string getName() const override { return "Comic Art"; }
     FilterType getType() const override { return FilterType::Cartoon; }
     
     void setParameter(const std::string& name, float value) override;
@@ -20,4 +20,5 @@ private:
     int numBilateralFilters;
     float edgeThreshold;
 };
+
 

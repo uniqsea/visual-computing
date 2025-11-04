@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <vector>
 
 class Timer {
 public:
@@ -24,10 +23,5 @@ private:
     double deltaTime;
     double frameTime;
     float currentFPS;
-    
-    // Rolling average for FPS calculation
-    std::vector<double> frameTimes;
-    size_t maxSamples = 60;
-    size_t currentIndex = 0;
 };
 

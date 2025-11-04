@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Filter.h"
+#include "filters/Filter.h"
 
 class PixelationFilter : public Filter {
 public:
-    PixelationFilter(int blockSize = 10);
+    PixelationFilter(int blockSize = 25);
     
     void applyCPU(cv::Mat& frame) override;
     void applyGPU(ShaderProgram& shader) override;
@@ -21,4 +21,3 @@ public:
 private:
     int blockSize;
 };
-

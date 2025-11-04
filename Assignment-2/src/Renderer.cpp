@@ -13,15 +13,17 @@ bool Renderer::initialize(int width, int height) {
     windowWidth = width;
     windowHeight = height;
     
-    // Load OpenGL functions
-    int version = gladLoadGL(glfwGetProcAddress);
-    if (version == 0) {
-        std::cerr << "Failed to initialize OpenGL context" << std::endl;
+    // Get OpenGL version (macOS native)
+    const GLubyte* version = glGetString(GL_VERSION);
+    const GLubyte* renderer = glGetString(GL_RENDERER);
+    
+    if (!version || !renderer) {
+        std::cerr << "Failed to get OpenGL information" << std::endl;
         return false;
     }
     
-    std::cout << "OpenGL " << GLAD_VERSION_MAJOR(version) << "." 
-              << GLAD_VERSION_MINOR(version) << " initialized" << std::endl;
+    std::cout << "OpenGL Version: " << version << std::endl;
+    std::cout << "Renderer: " << renderer << std::endl;
     
     // Set viewport
     glViewport(0, 0, width, height);
@@ -34,6 +36,11 @@ bool Renderer::initialize(int width, int height) {
     setupQuad();
     
     return true;
+}
+
+void Renderer::updateSize(int width, int height) {
+    windowWidth = width;
+    windowHeight = height;
 }
 
 void Renderer::setupQuad() {
@@ -94,4 +101,3 @@ void Renderer::renderTexturedQuad(const Texture& texture, ShaderProgram& shader)
     texture.unbind();
     shader.unuse();
 }
-

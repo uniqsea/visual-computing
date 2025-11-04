@@ -1,4 +1,4 @@
-#include "AffineTransform.h"
+#include "transforms/AffineTransform.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 
@@ -50,8 +50,10 @@ cv::Mat AffineTransform::getOpenCVMatrix(int frameWidth, int frameHeight) const 
     cv::Mat rotMat = cv::getRotationMatrix2D(center, rotation * 180.0f / M_PI, scaleValue);
     
     // Add translation
+    // Note: final texture upload flips vertically for OpenGL coordinates.
+    // Invert Y here so on-screen panning matches GPU behavior.
     rotMat.at<double>(0, 2) += translation.x;
-    rotMat.at<double>(1, 2) += translation.y;
+    rotMat.at<double>(1, 2) += -translation.y;
     
     return rotMat;
 }
@@ -113,3 +115,12 @@ glm::mat3 AffineTransform::getGPUMatrix3() const {
     return matrix;
 }
 
+glm::mat4 AffineTransform::getGPUMatrixForViewport(float viewportWidth, float viewportHeight) const {
+    glm::mat4 matrix = glm::mat4(1.0f);
+    float ndcX = (viewportWidth  > 0.0f) ? (2.0f * translation.x / viewportWidth) : 0.0f;
+    float ndcY = (viewportHeight > 0.0f) ? (-2.0f * translation.y / viewportHeight) : 0.0f; // invert y for screen coords
+    matrix = glm::translate(matrix, glm::vec3(ndcX, ndcY, 0.0f));
+    matrix = glm::rotate(matrix, rotation, glm::vec3(0.0f, 0.0f, 1.0f));
+    matrix = glm::scale(matrix, glm::vec3(scaleValue, scaleValue, 1.0f));
+    return matrix;
+}

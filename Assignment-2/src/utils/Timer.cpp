@@ -1,10 +1,7 @@
-#include "Timer.h"
-#include <numeric>
-#include <algorithm>
+#include "utils/Timer.h"
 
 Timer::Timer() 
     : deltaTime(0.0), frameTime(0.0), currentFPS(0.0f) {
-    frameTimes.resize(maxSamples, 0.0);
     start();
 }
 
@@ -21,14 +18,9 @@ void Timer::update() {
     deltaTime = delta.count();
     frameTime = deltaTime * 1000.0; // Convert to milliseconds
     
-    // Update rolling average
-    frameTimes[currentIndex] = deltaTime;
-    currentIndex = (currentIndex + 1) % maxSamples;
-    
-    // Calculate average FPS
-    double avgFrameTime = std::accumulate(frameTimes.begin(), frameTimes.end(), 0.0) / maxSamples;
-    if (avgFrameTime > 0.0) {
-        currentFPS = static_cast<float>(1.0 / avgFrameTime);
+    // Calculate FPS directly from current frame time
+    if (deltaTime > 0.0) {
+        currentFPS = static_cast<float>(1.0 / deltaTime);
     }
     
     lastFrameTime = currentTime;

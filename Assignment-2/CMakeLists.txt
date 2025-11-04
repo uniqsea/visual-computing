@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.15)
-project(RealTimeVideoProcessing VERSION 1.0 LANGUAGES CXX)
+project(Assignment-2 VERSION 1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Set output directories
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+# Set output directories (directly in build/)
+# set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Add Homebrew paths for macOS
 if(APPLE)
@@ -31,17 +31,10 @@ find_package(OpenCV REQUIRED)
 
 # Include directories
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/external
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/glad
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui/backends
     ${OpenCV_INCLUDE_DIRS}
-)
-
-# GLAD source
-set(GLAD_SOURCES
-    external/glad/gl.c
 )
 
 # Dear ImGui sources
@@ -66,16 +59,17 @@ set(APP_SOURCES
     src/GUI.cpp
     src/filters/FilterManager.cpp
     src/filters/PixelationFilter.cpp
-    src/filters/CartoonFilter.cpp
+    src/filters/ComicArtFilter.cpp
+    src/filters/OilPaintingFilter.cpp
     src/transforms/AffineTransform.cpp
     src/utils/Timer.cpp
     src/utils/PerformanceLogger.cpp
+    src/utils/PerformanceEvaluation.cpp
 )
 
 # Create executable
 add_executable(${PROJECT_NAME}
     ${APP_SOURCES}
-    ${GLAD_SOURCES}
     ${IMGUI_SOURCES}
 )
 
@@ -119,7 +113,7 @@ endif()
 
 # Copy shaders to build directory
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/shaders
-     DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+     DESTINATION ${CMAKE_BINARY_DIR})
 
 # Print configuration
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")

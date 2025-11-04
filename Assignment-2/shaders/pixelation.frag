@@ -5,21 +5,26 @@ out vec4 FragColor;
 
 uniform sampler2D videoTexture;
 uniform int blockSize = 10;
+uniform vec2 uvScale = vec2(1.0, 1.0);
 
 void main() {
-    // Get texture dimensions
+    // Texture size (in texels)
     vec2 texSize = vec2(textureSize(videoTexture, 0));
     
-    // Calculate pixel size in texture coordinates
-    vec2 pixelSize = vec2(blockSize) / texSize;
+    // Apply cover scaling first
+    vec2 uv = (TexCoord - 0.5) * uvScale + 0.5;
     
-    // Calculate pixelated coordinates
-    vec2 pixelatedCoord = floor(TexCoord / pixelSize) * pixelSize;
+    // Quantize by integer texels per block to match CPU alignment
+    float bs = float(blockSize);
+    vec2 pix = uv * texSize;
+    vec2 blockIdx = floor(pix / bs);
+    vec2 centerPix = (blockIdx + 0.5) * bs; // center of the block in texel space
+    vec2 sampleUV = centerPix / texSize;
     
-    // Add half pixel offset to sample from center of block
-    pixelatedCoord += pixelSize * 0.5;
+    // Use an effective scale-based LOD to better match non-divisible sizes
+    vec2 blocks = max(floor(texSize / bs), vec2(1.0));
+    vec2 scaleEff = texSize / blocks; // effective texels per block
+    float lod = max(log2(max(scaleEff.x, scaleEff.y)), 0.0);
     
-    // Sample texture
-    FragColor = texture(videoTexture, pixelatedCoord);
+    FragColor = textureLod(videoTexture, sampleUV, lod);
 }
-

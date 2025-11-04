@@ -10,14 +10,19 @@ struct PerformanceData {
     std::string mode;        // CPU or GPU
     bool transformEnabled;
     std::string buildMode;   // Debug or Release
-    float fps;
-    float stdDev;
     
-    PerformanceData(const std::string& res, const std::string& filt, 
-                   const std::string& m, bool trans, const std::string& build,
-                   float f, float std = 0.0f)
+    // Aggregated averages (ms)
+    float frameTimeAvgMs;   // End-to-end
+    float algoTimeAvgMs;    // Algorithm-only
+    
+    int sampleCount;
+    
+    PerformanceData(const std::string& res, const std::string& filt,
+                    const std::string& m, bool trans, const std::string& build,
+                    float frameAvgMs, float algoAvgMs, int samples)
         : resolution(res), filter(filt), mode(m), transformEnabled(trans),
-          buildMode(build), fps(f), stdDev(std) {}
+          buildMode(build), frameTimeAvgMs(frameAvgMs), algoTimeAvgMs(algoAvgMs),
+          sampleCount(samples) {}
 };
 
 class PerformanceLogger {
@@ -25,7 +30,7 @@ public:
     PerformanceLogger();
     
     void addEntry(const PerformanceData& data);
-    void exportToCSV(const std::string& filename = "data/performance_results.csv");
+    bool exportToCSV(const std::string& filename = "data/performance_results.csv");
     void clear();
     
     size_t getEntryCount() const { return entries.size(); }

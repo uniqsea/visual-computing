@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Transform.h"
+#include "transforms/Transform.h"
 
 class AffineTransform : public Transform {
 public:
@@ -9,6 +9,8 @@ public:
     void applyCPU(cv::Mat& frame) override;
     glm::mat4 getGPUMatrix() const override;
     glm::mat3 getGPUMatrix3() const override;
+    // For GPU path with pixel-based interaction, convert translation (pixels) to NDC by viewport size
+    glm::mat4 getGPUMatrixForViewport(float viewportWidth, float viewportHeight) const;
     
     void reset() override;
     

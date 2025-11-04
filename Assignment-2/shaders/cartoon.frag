@@ -6,6 +6,7 @@ out vec4 FragColor;
 uniform sampler2D videoTexture;
 uniform float edgeThreshold = 0.2;
 uniform int quantizeLevels = 8;
+uniform vec2 uvScale = vec2(1.0, 1.0);
 
 // Sobel edge detection
 float edgeDetection(vec2 texCoord) {
@@ -40,7 +41,10 @@ float edgeDetection(vec2 texCoord) {
         }
     }
     
-    return sqrt(gx * gx + gy * gy);
+    // Normalize to [0,1] so edgeThreshold has consistent semantics
+    float mag = sqrt(gx * gx + gy * gy);
+    const float SOBEL_MAX = 5.656854249; // 4*sqrt(2)
+    return mag / SOBEL_MAX;
 }
 
 // Color quantization
@@ -50,19 +54,21 @@ vec3 quantizeColor(vec3 color, int levels) {
 }
 
 void main() {
-    vec3 color = texture(videoTexture, TexCoord).rgb;
+    vec2 uv = (TexCoord - 0.5) * uvScale + 0.5;
+    vec3 color = texture(videoTexture, uv).rgb;
     
-    // Detect edges
-    float edge = edgeDetection(TexCoord);
+    // Detect edges with a single 3x3 Sobel (no neighborhood max)
+    float edge = edgeDetection(uv);
+    // Gamma>1: low slider values produce lower threshold (more edges)
+    float thr = pow(edgeThreshold, 1.6);
     
     // Quantize colors for cartoon effect
     vec3 quantized = quantizeColor(color, quantizeLevels);
     
     // Apply edge darkening
-    if (edge > edgeThreshold) {
+    if (edge > thr) {
         quantized *= 0.0; // Make edges black
     }
     
     FragColor = vec4(quantized, 1.0);
 }
-

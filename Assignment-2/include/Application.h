@@ -1,9 +1,8 @@
 #pragma once
 
-#include <GLFW/glfw3.h>
 #include <memory>
-#include "VideoCapture.h"
 #include "Renderer.h"
+#include "VideoCapture.h"
 #include "ShaderProgram.h"
 #include "Texture.h"
 #include "GUI.h"
@@ -11,6 +10,10 @@
 #include "transforms/AffineTransform.h"
 #include "utils/Timer.h"
 #include "utils/PerformanceLogger.h"
+#include "utils/PerformanceEvaluation.h"
+
+// Forward declaration
+struct GLFWwindow;
 
 class Application {
 public:
@@ -36,15 +39,23 @@ private:
     std::unique_ptr<AffineTransform> transform;
     std::unique_ptr<Timer> timer;
     std::unique_ptr<PerformanceLogger> perfLogger;
+    std::unique_ptr<PerformanceBenchmark> benchmark;
     
     // Shaders
     std::unique_ptr<ShaderProgram> basicShader;
     std::unique_ptr<ShaderProgram> pixelationShader;
     std::unique_ptr<ShaderProgram> cartoonShader;
+    std::unique_ptr<ShaderProgram> oilPaintingShader;
+    // Edge shader removed
     
     // State
     bool isRunning;
     cv::Mat currentFrame;
+    std::string buildMode;
+    double currentAlgoSec = 0.0; // measured per-frame algorithm processing time
+    // Screenshot after benchmark completes
+    bool pendingScreenshot = false;
+    std::string pendingScreenshotPath;
     
     // Mouse state for transform interaction
     bool leftMousePressed;
@@ -66,6 +77,9 @@ private:
     void applyTransform(cv::Mat& frame);
     
     ShaderProgram* getCurrentShader();
+
+    // Utilities
+    void captureScreenshot(const std::string& absolutePath);
     
     // Callbacks
     static void errorCallback(int error, const char* description);
@@ -75,4 +89,3 @@ private:
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
     static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
 };
-

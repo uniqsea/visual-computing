@@ -1,5 +1,5 @@
-#include "PixelationFilter.h"
-#include "../ShaderProgram.h"
+#include "filters/PixelationFilter.h"
+#include "ShaderProgram.h"
 
 PixelationFilter::PixelationFilter(int blockSize) : blockSize(blockSize) {
 }
@@ -21,8 +21,8 @@ void PixelationFilter::applyCPU(cv::Mat& frame) {
     
     cv::Mat small;
     
-    // Downscale
-    cv::resize(frame, small, cv::Size(smallWidth, smallHeight), 0, 0, cv::INTER_LINEAR);
+    // Downscale (INTER_AREA is better for shrinking and reduces aliasing)
+    cv::resize(frame, small, cv::Size(smallWidth, smallHeight), 0, 0, cv::INTER_AREA);
     
     // Upscale back to original size with nearest neighbor interpolation
     cv::resize(small, frame, cv::Size(originalWidth, originalHeight), 0, 0, cv::INTER_NEAREST);

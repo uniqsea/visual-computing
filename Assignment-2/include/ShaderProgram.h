@@ -1,7 +1,8 @@
 #pragma once
 
 #include <string>
-#include <glad/gl.h>
+#define GL_SILENCE_DEPRECATION
+#include <OpenGL/gl3.h>
 #include <glm/glm.hpp>
 
 class ShaderProgram {

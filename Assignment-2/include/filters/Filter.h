@@ -8,7 +8,8 @@ class ShaderProgram;
 enum class FilterType {
     None,
     Pixelation,
-    Cartoon
+    Cartoon,
+    OilPainting
 };
 
 class Filter {

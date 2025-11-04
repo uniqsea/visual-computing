@@ -1,7 +1,10 @@
 #pragma once
 
-#include <glad/gl.h>
+// OpenGL (must be before GLFW)
+#define GL_SILENCE_DEPRECATION  // Silence macOS OpenGL deprecation warnings
+#include <OpenGL/gl3.h>
 #include <GLFW/glfw3.h>
+
 #include "ShaderProgram.h"
 #include "Texture.h"
 #include <memory>
@@ -13,6 +16,7 @@ public:
     
     bool initialize(int width, int height);
     void shutdown();
+    void updateSize(int width, int height);
     
     void clear(float r = 0.0f, float g = 0.0f, float b = 0.0f, float a = 1.0f);
     void renderTexturedQuad(const Texture& texture, ShaderProgram& shader);
@@ -29,4 +33,3 @@ private:
     
     void setupQuad();
 };
-

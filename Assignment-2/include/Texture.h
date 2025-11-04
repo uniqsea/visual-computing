@@ -1,6 +1,7 @@
 #pragma once
 
-#include <glad/gl.h>
+#define GL_SILENCE_DEPRECATION
+#include <OpenGL/gl3.h>
 #include <opencv2/opencv.hpp>
 
 class Texture {
@@ -9,7 +10,7 @@ public:
     ~Texture();
     
     void create(int width, int height);
-    void updateFromMat(const cv::Mat& mat);
+    void updateFromMat(const cv::Mat& mat, bool mirrorHorizontally = false);
     
     void bind(GLuint unit = 0) const;
     void unbind() const;
@@ -23,4 +24,3 @@ private:
     int width;
     int height;
 };
-
