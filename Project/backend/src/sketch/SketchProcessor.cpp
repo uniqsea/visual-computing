@@ -5,6 +5,7 @@
 #endif
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -41,67 +42,355 @@ struct SvgDocument {
   std::vector<SvgShape> shapes;
 };
 
-bool parseSvgPath(const std::string &d, SvgShape &shape) {
+struct SvgTransform {
+  float a = 1.0f;
+  float b = 0.0f;
+  float c = 0.0f;
+  float d = 1.0f;
+  float e = 0.0f;
+  float f = 0.0f;
+};
+
+constexpr float kPi = 3.14159265358979323846f;
+
+SvgTransform multiplyTransform(const SvgTransform &lhs,
+                               const SvgTransform &rhs) {
+  SvgTransform result;
+  result.a = lhs.a * rhs.a + lhs.c * rhs.b;
+  result.b = lhs.b * rhs.a + lhs.d * rhs.b;
+  result.c = lhs.a * rhs.c + lhs.c * rhs.d;
+  result.d = lhs.b * rhs.c + lhs.d * rhs.d;
+  result.e = lhs.a * rhs.e + lhs.c * rhs.f + lhs.e;
+  result.f = lhs.b * rhs.e + lhs.d * rhs.f + lhs.f;
+  return result;
+}
+
+void applyTransform(const SvgTransform &transform,
+                    std::vector<std::array<float, 2>> &points) {
+  for (auto &pt : points) {
+    const float x = pt[0];
+    const float y = pt[1];
+    pt[0] = transform.a * x + transform.c * y + transform.e;
+    pt[1] = transform.b * x + transform.d * y + transform.f;
+  }
+}
+
+std::vector<float> parseFloatList(const std::string &text) {
+  std::vector<float> values;
+  const char *ptr = text.c_str();
+  while (*ptr) {
+    while (*ptr &&
+           (std::isspace(static_cast<unsigned char>(*ptr)) || *ptr == ',')) {
+      ++ptr;
+    }
+    if (!*ptr) {
+      break;
+    }
+    char *end = nullptr;
+    float value = std::strtof(ptr, &end);
+    if (end == ptr) {
+      ++ptr;
+      continue;
+    }
+    values.push_back(value);
+    ptr = end;
+  }
+  return values;
+}
+
+bool parseTransformList(const std::string &text, SvgTransform &out) {
+  if (text.empty()) {
+    return false;
+  }
+  SvgTransform current;
+  bool applied = false;
+  size_t pos = 0;
+  while (pos < text.size()) {
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos]))) {
+      ++pos;
+    }
+    size_t nameStart = pos;
+    while (pos < text.size() &&
+           std::isalpha(static_cast<unsigned char>(text[pos]))) {
+      ++pos;
+    }
+    if (nameStart == pos) {
+      if (pos < text.size()) {
+        ++pos;
+      }
+      continue;
+    }
+    std::string name = text.substr(nameStart, pos - nameStart);
+    while (pos < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[pos]))) {
+      ++pos;
+    }
+    if (pos >= text.size() || text[pos] != '(') {
+      break;
+    }
+    ++pos;
+    int depth = 1;
+    size_t argsStart = pos;
+    while (pos < text.size() && depth > 0) {
+      if (text[pos] == '(') {
+        ++depth;
+      } else if (text[pos] == ')') {
+        --depth;
+      }
+      ++pos;
+    }
+    if (depth != 0) {
+      break;
+    }
+    const size_t argsEnd = pos - 1;
+    std::string argsText = text.substr(argsStart, argsEnd - argsStart);
+    std::vector<float> args = parseFloatList(argsText);
+    SvgTransform local;
+    if (name == "translate") {
+      if (!args.empty()) {
+        local.e = args[0];
+        local.f = args.size() > 1 ? args[1] : 0.0f;
+      }
+    } else if (name == "scale") {
+      if (!args.empty()) {
+        local.a = args[0];
+        local.d = args.size() > 1 ? args[1] : args[0];
+      }
+    } else if (name == "matrix" && args.size() == 6) {
+      local.a = args[0];
+      local.b = args[1];
+      local.c = args[2];
+      local.d = args[3];
+      local.e = args[4];
+      local.f = args[5];
+    } else if (name == "rotate" && !args.empty()) {
+      const float angle = args[0] * (kPi / 180.0f);
+      const float cosA = std::cos(angle);
+      const float sinA = std::sin(angle);
+      SvgTransform rotation;
+      rotation.a = cosA;
+      rotation.b = sinA;
+      rotation.c = -sinA;
+      rotation.d = cosA;
+      rotation.e = 0.0f;
+      rotation.f = 0.0f;
+      if (args.size() >= 3) {
+        SvgTransform translateTo;
+        translateTo.e = args[1];
+        translateTo.f = args[2];
+        SvgTransform translateBack;
+        translateBack.e = -args[1];
+        translateBack.f = -args[2];
+        local = multiplyTransform(translateTo,
+                                  multiplyTransform(rotation, translateBack));
+      } else {
+        local = rotation;
+      }
+    } else {
+      continue;
+    }
+    current = multiplyTransform(local, current);
+    applied = true;
+  }
+  if (applied) {
+    out = current;
+  }
+  return applied;
+}
+
+std::string getAttributeValue(const std::string &tag,
+                              const std::string &attribute) {
+  std::string key = attribute + "=";
+  size_t pos = 0;
+  while ((pos = tag.find(key, pos)) != std::string::npos) {
+    if (pos > 0) {
+      char prev = tag[pos - 1];
+      if (std::isalnum(static_cast<unsigned char>(prev)) || prev == '-' ||
+          prev == ':') {
+        pos += key.size();
+        continue;
+      }
+    }
+    size_t start = pos + key.size();
+    while (start < tag.size() &&
+           std::isspace(static_cast<unsigned char>(tag[start]))) {
+      ++start;
+    }
+    if (start >= tag.size()) {
+      break;
+    }
+    char quote = tag[start];
+    if (quote == '\"' || quote == '\'') {
+      ++start;
+      size_t end = tag.find(quote, start);
+      if (end == std::string::npos) {
+        break;
+      }
+      return tag.substr(start, end - start);
+    } else {
+      size_t end = start;
+      while (end < tag.size() &&
+             !std::isspace(static_cast<unsigned char>(tag[end])) &&
+             tag[end] != '/') {
+        ++end;
+      }
+      return tag.substr(start, end - start);
+    }
+  }
+  return "";
+}
+
+void normalizeSvgCoordinates(SvgDocument &doc) {
+  if (doc.shapes.empty()) {
+    return;
+  }
+  float minX = std::numeric_limits<float>::max();
+  float maxX = std::numeric_limits<float>::lowest();
+  float minY = std::numeric_limits<float>::max();
+  float maxY = std::numeric_limits<float>::lowest();
+  bool hasPoints = false;
+  for (const auto &shape : doc.shapes) {
+    for (const auto &pt : shape.points) {
+      minX = std::min(minX, pt[0]);
+      maxX = std::max(maxX, pt[0]);
+      minY = std::min(minY, pt[1]);
+      maxY = std::max(maxY, pt[1]);
+      hasPoints = true;
+    }
+  }
+  if (!hasPoints) {
+    return;
+  }
+  const float widthF = static_cast<float>(doc.width);
+  const float heightF = static_cast<float>(doc.height);
+  const bool needScaleX = minX < -0.01f || maxX > widthF + 0.01f;
+  const bool needScaleY = minY < -0.01f || maxY > heightF + 0.01f;
+  if (!needScaleX && !needScaleY) {
+    return;
+  }
+  const float epsilon = 1e-3f;
+  const float denomX = std::max(maxX - minX, epsilon);
+  const float denomY = std::max(maxY - minY, epsilon);
+  const float scaleX = needScaleX ? widthF / denomX : 1.0f;
+  const float scaleY = needScaleY ? heightF / denomY : 1.0f;
+  const float clampMaxX = std::max(widthF - 1.0f, 0.0f);
+  const float clampMaxY = std::max(heightF - 1.0f, 0.0f);
+  for (auto &shape : doc.shapes) {
+    for (auto &pt : shape.points) {
+      if (needScaleX) {
+        pt[0] = std::clamp((pt[0] - minX) * scaleX, 0.0f, clampMaxX);
+      }
+      if (needScaleY) {
+        pt[1] = std::clamp((pt[1] - minY) * scaleY, 0.0f, clampMaxY);
+      }
+    }
+  }
+}
+
+bool parseSvgPath(const std::string &d, std::vector<SvgShape> &shapes) {
+  auto isNumberStart = [](int c) -> bool {
+    return c == '-' || c == '+' || c == '.' ||
+           (c >= '0' && c <= '9');
+  };
   std::stringstream ss(d);
   char cmd;
   float args[6];
   std::array<float, 2> current = {0.0f, 0.0f};
   std::array<float, 2> start = {0.0f, 0.0f};
+  SvgShape currentShape;
+  currentShape.strokeWidth = 2.0f;
 
-  // Simple parser for M, L, C, Z (absolute) and m, l, c, z (relative)
-  // This is not a full SVG parser but covers Potrace output and basic shapes.
+  auto finalizeShape = [&]() {
+    if (!currentShape.points.empty()) {
+      shapes.push_back(currentShape);
+      currentShape = SvgShape{};
+      currentShape.strokeWidth = 2.0f;
+    }
+  };
+
+  // Simple parser for M, L, C, Z (absolute) and m, l, c, z (relative).
+  // Supports implicit coordinate repetitions as emitted by Potrace.
   while (ss >> cmd) {
     if (cmd == 'M' || cmd == 'm') {
-      if (!(ss >> args[0] >> args[1]))
-        break;
-      if (cmd == 'm') {
-        args[0] += current[0];
-        args[1] += current[1];
+      bool firstPair = true;
+      while (true) {
+        if (!(ss >> args[0] >> args[1]))
+          break;
+        char effective = firstPair ? cmd : (cmd == 'M' ? 'L' : 'l');
+        if (effective == 'm' || effective == 'l') {
+          args[0] += current[0];
+          args[1] += current[1];
+        }
+        current = {args[0], args[1]};
+        if (firstPair) {
+          start = current;
+          if (!currentShape.points.empty()) {
+            finalizeShape();
+          }
+          currentShape.points.push_back(current);
+          currentShape.closed = false;
+          firstPair = false;
+        } else {
+          currentShape.points.push_back(current);
+        }
+        ss >> std::ws;
+        if (!isNumberStart(ss.peek()))
+          break;
       }
-      current = {args[0], args[1]};
-      start = current;
-      shape.points.push_back(current);
     } else if (cmd == 'L' || cmd == 'l') {
-      if (!(ss >> args[0] >> args[1]))
-        break;
-      if (cmd == 'l') {
-        args[0] += current[0];
-        args[1] += current[1];
+      while (true) {
+        if (!(ss >> args[0] >> args[1]))
+          break;
+        if (cmd == 'l') {
+          args[0] += current[0];
+          args[1] += current[1];
+        }
+        current = {args[0], args[1]};
+        currentShape.points.push_back(current);
+        ss >> std::ws;
+        if (!isNumberStart(ss.peek()))
+          break;
       }
-      current = {args[0], args[1]};
-      shape.points.push_back(current);
     } else if (cmd == 'C' || cmd == 'c') {
-      if (!(ss >> args[0] >> args[1] >> args[2] >> args[3] >> args[4] >>
-            args[5]))
-        break;
-      if (cmd == 'c') {
-        args[0] += current[0];
-        args[1] += current[1];
-        args[2] += current[0];
-        args[3] += current[1];
-        args[4] += current[0];
-        args[5] += current[1];
+      while (true) {
+        if (!(ss >> args[0] >> args[1] >> args[2] >> args[3] >> args[4] >>
+              args[5]))
+          break;
+        if (cmd == 'c') {
+          args[0] += current[0];
+          args[1] += current[1];
+          args[2] += current[0];
+          args[3] += current[1];
+          args[4] += current[0];
+          args[5] += current[1];
+        }
+        // Sample cubic bezier
+        const int segments = 10;
+        for (int i = 1; i <= segments; ++i) {
+          float t = static_cast<float>(i) / segments;
+          float t1 = 1.0f - t;
+          float x = t1 * t1 * t1 * current[0] + 3 * t1 * t1 * t * args[0] +
+                    3 * t1 * t * t * args[2] + t * t * t * args[4];
+          float y = t1 * t1 * t1 * current[1] + 3 * t1 * t1 * t * args[1] +
+                    3 * t1 * t * t * args[3] + t * t * t * args[5];
+          currentShape.points.push_back({x, y});
+        }
+        current = {args[4], args[5]};
+        ss >> std::ws;
+        if (!isNumberStart(ss.peek()))
+          break;
       }
-      // Sample cubic bezier
-      const int segments = 10;
-      for (int i = 1; i <= segments; ++i) {
-        float t = static_cast<float>(i) / segments;
-        float t1 = 1.0f - t;
-        float x = t1 * t1 * t1 * current[0] + 3 * t1 * t1 * t * args[0] +
-                  3 * t1 * t * t * args[2] + t * t * t * args[4];
-        float y = t1 * t1 * t1 * current[1] + 3 * t1 * t1 * t * args[1] +
-                  3 * t1 * t * t * args[3] + t * t * t * args[5];
-        shape.points.push_back({x, y});
-      }
-      current = {args[4], args[5]};
     } else if (cmd == 'Z' || cmd == 'z') {
-      shape.closed = true;
+      currentShape.closed = true;
       // Close loop if needed
-      if (std::abs(current[0] - start[0]) > 0.1f ||
-          std::abs(current[1] - start[1]) > 0.1f) {
-        shape.points.push_back(start);
+      if (!currentShape.points.empty() &&
+          (std::abs(current[0] - start[0]) > 0.1f ||
+           std::abs(current[1] - start[1]) > 0.1f)) {
+        currentShape.points.push_back(start);
       }
       current = start;
+      finalizeShape();
     } else {
       // Skip unknown or comma
       if (cmd != ',') {
@@ -110,7 +399,8 @@ bool parseSvgPath(const std::string &d, SvgShape &shape) {
       }
     }
   }
-  return !shape.points.empty();
+  finalizeShape();
+  return !shapes.empty();
 }
 
 bool loadSvgDocument(const std::string &path, SvgDocument &doc) {
@@ -156,48 +446,172 @@ bool loadSvgDocument(const std::string &path, SvgDocument &doc) {
     }
   }
 
-  // 2. Fallback: Parse standard SVG paths
-  // Extract width/height
-  auto findAttr = [&](const std::string &s,
-                      const std::string &attr) -> std::string {
-    auto pos = s.find(attr + "=\"");
-    if (pos == std::string::npos)
-      return "";
-    pos += attr.size() + 2;
-    auto end = s.find("\"", pos);
-    if (end == std::string::npos)
-      return "";
-    return s.substr(pos, end - pos);
+  // 2. Fallback: Parse standard SVG with minimal tag handling
+  auto updateDimensions = [&](const std::string &tag) {
+    std::string w = getAttributeValue(tag, "width");
+    std::string h = getAttributeValue(tag, "height");
+    if (!w.empty()) {
+      doc.width = std::atoi(w.c_str());
+    }
+    if (!h.empty()) {
+      doc.height = std::atoi(h.c_str());
+    }
   };
+  size_t svgPos = content.find("<svg");
+  if (svgPos != std::string::npos) {
+    size_t svgEnd = content.find('>', svgPos);
+    if (svgEnd != std::string::npos) {
+      std::string svgTag = content.substr(svgPos + 4, svgEnd - svgPos - 4);
+      updateDimensions(svgTag);
+    }
+  }
 
-  std::string wStr = findAttr(content, "width");
-  std::string hStr = findAttr(content, "height");
-  if (!wStr.empty())
-    doc.width = std::atoi(wStr.c_str());
-  if (!hStr.empty())
-    doc.height = std::atoi(hStr.c_str());
-
-  // Find all <path> tags
   doc.shapes.clear();
+  std::vector<SvgTransform> transformStack;
+  transformStack.push_back(SvgTransform{});
   size_t pos = 0;
-  while ((pos = content.find("<path", pos)) != std::string::npos) {
-    size_t end = content.find("/>", pos);
-    size_t end2 = content.find("</path>", pos);
-    if (end == std::string::npos)
-      end = end2;
-    if (end == std::string::npos)
+  while (pos < content.size()) {
+    size_t tagStart = content.find('<', pos);
+    if (tagStart == std::string::npos) {
       break;
+    }
+    if (content.compare(tagStart, 4, "<!--") == 0) {
+      size_t commentEnd = content.find("-->", tagStart + 4);
+      if (commentEnd == std::string::npos) {
+        break;
+      }
+      pos = commentEnd + 3;
+      continue;
+    }
+    if (content.compare(tagStart, 2, "<?") == 0) {
+      size_t declEnd = content.find("?>", tagStart + 2);
+      if (declEnd == std::string::npos) {
+        break;
+      }
+      pos = declEnd + 2;
+      continue;
+    }
+    size_t tagEnd = content.find('>', tagStart + 1);
+    if (tagEnd == std::string::npos) {
+      break;
+    }
+    std::string tagText = content.substr(tagStart + 1, tagEnd - tagStart - 1);
+    pos = tagEnd + 1;
+    if (!tagText.empty() && tagText[0] == '!') {
+      continue;
+    }
 
-    std::string tag = content.substr(pos, end - pos);
-    std::string d = findAttr(tag, "d");
-    if (!d.empty()) {
-      SvgShape s;
-      s.strokeWidth = 2.0f; // Default
-      if (parseSvgPath(d, s)) {
-        doc.shapes.push_back(std::move(s));
+    auto trim = [](std::string s) {
+      size_t start = 0;
+      while (start < s.size() &&
+             std::isspace(static_cast<unsigned char>(s[start]))) {
+        ++start;
+      }
+      size_t end = s.size();
+      while (end > start &&
+             std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        --end;
+      }
+      return s.substr(start, end - start);
+    };
+    std::string trimmed = trim(tagText);
+    if (trimmed.empty()) {
+      continue;
+    }
+    bool closing = trimmed[0] == '/';
+    bool selfClosing = false;
+    size_t len = trimmed.size();
+    size_t back = len;
+    while (back > 0 &&
+           std::isspace(static_cast<unsigned char>(trimmed[back - 1]))) {
+      --back;
+    }
+    if (back > 0 && trimmed[back - 1] == '/') {
+      selfClosing = true;
+      trimmed = trimmed.substr(0, back - 1);
+      trimmed = trim(trimmed);
+    }
+    size_t nameStart = closing ? 1 : 0;
+    while (nameStart < trimmed.size() &&
+           std::isspace(static_cast<unsigned char>(trimmed[nameStart]))) {
+      ++nameStart;
+    }
+    size_t nameEnd = nameStart;
+    while (nameEnd < trimmed.size() &&
+           !std::isspace(static_cast<unsigned char>(trimmed[nameEnd])) &&
+           trimmed[nameEnd] != '/') {
+      ++nameEnd;
+    }
+    std::string tagName = trimmed.substr(nameStart, nameEnd - nameStart);
+    std::string lowerTag = tagName;
+    std::transform(lowerTag.begin(), lowerTag.end(), lowerTag.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::string attrBody =
+        nameEnd < trimmed.size() ? trimmed.substr(nameEnd) : std::string();
+
+    if (lowerTag == "g") {
+      if (closing) {
+        if (transformStack.size() > 1) {
+          transformStack.pop_back();
+        }
+      } else {
+        SvgTransform combined = transformStack.back();
+        std::string transformAttr = getAttributeValue(attrBody, "transform");
+        if (!transformAttr.empty()) {
+          SvgTransform parsed;
+          if (parseTransformList(transformAttr, parsed)) {
+            combined = multiplyTransform(combined, parsed);
+          }
+        }
+        transformStack.push_back(combined);
+        if (selfClosing && transformStack.size() > 1) {
+          transformStack.pop_back();
+        }
+      }
+    } else if (lowerTag == "path" && !closing) {
+      std::string d = getAttributeValue(attrBody, "d");
+      if (d.empty()) {
+        continue;
+      }
+      std::vector<SvgShape> parsed;
+      if (!parseSvgPath(d, parsed)) {
+        continue;
+      }
+      SvgTransform local = transformStack.back();
+      std::string transformAttr = getAttributeValue(attrBody, "transform");
+      if (!transformAttr.empty()) {
+        SvgTransform parsedTransform;
+        if (parseTransformList(transformAttr, parsedTransform)) {
+          local = multiplyTransform(local, parsedTransform);
+        }
+      }
+      std::string strokeAttr = getAttributeValue(attrBody, "stroke-width");
+      for (auto &shape : parsed) {
+        applyTransform(local, shape.points);
+        if (!strokeAttr.empty()) {
+          try {
+            float width = std::stof(strokeAttr);
+            if (width > 0.0f) {
+              shape.strokeWidth = width;
+            }
+          } catch (...) {
+            // ignore malformed stroke widths
+          }
+        }
+        doc.shapes.push_back(std::move(shape));
       }
     }
-    pos = end;
+  }
+
+  normalizeSvgCoordinates(doc);
+
+  // Debug logging
+  std::cout << "[SketchProcessor] Loaded SVG: " << doc.shapes.size()
+            << " shapes, " << doc.width << "x" << doc.height << std::endl;
+  for (size_t i = 0; i < doc.shapes.size(); ++i) {
+    std::cout << "  Shape " << i << ": " << doc.shapes[i].points.size()
+              << " points, closed=" << doc.shapes[i].closed
+              << ", stroke=" << doc.shapes[i].strokeWidth << std::endl;
   }
 
   return !doc.shapes.empty();
@@ -316,123 +730,259 @@ bool loadBitmapMask(const std::string &path, cv::Mat &mask) {
 SketchProcessor::SketchProcessor() = default;
 
 SketchData SketchProcessor::process(const std::string &sketchPath,
-                                    float strokeThickness) const {
+                                    float strokeThickness,
+                                    float axisOffsetX) const {
   SketchData data;
 #if __has_include(<opencv2/opencv.hpp>)
   cv::Mat mask;
+  bool isSvg = false;
+  SvgDocument svgDoc;
+
   if (hasSvgExtension(sketchPath)) {
-    SvgDocument doc;
-    if (!loadSvgDocument(sketchPath, doc) || !rasterizeSvg(doc, mask)) {
+    if (loadSvgDocument(sketchPath, svgDoc)) {
+      isSvg = true;
+      data.imageWidth = svgDoc.width;
+      data.imageHeight = svgDoc.height;
+      data.estimatedStroke = strokeThickness > 0.0f ? strokeThickness : 2.0f;
+
+      // Use SVG vector data directly - no rasterization needed!
+      data.contours.clear();
+      int largestIndex = -1;
+      double largestArea = 0.0;
+
+      // Check if SVG uses normalized coordinates (0-1 range) or absolute pixel
+      // coordinates Heuristic: if max coordinate is close to 1, it's
+      // normalized; if close to width/height, it's absolute
+      float maxCoord = 0.0f;
+      for (const auto &shape : svgDoc.shapes) {
+        for (const auto &pt : shape.points) {
+          maxCoord = std::max(maxCoord, std::max(pt[0], pt[1]));
+        }
+      }
+
+      // If max coordinate is < 2.0, assume normalized (0-1 range)
+      // If max coordinate is >= 10, assume absolute pixels
+      bool usesNormalizedCoords = (maxCoord < 2.0f);
+
+      std::cout << "[SketchProcessor] SVG max coordinate: " << maxCoord
+                << ", treating as: "
+                << (usesNormalizedCoords ? "normalized (0-1)"
+                                         : "absolute pixels")
+                << std::endl;
+
+      for (size_t i = 0; i < svgDoc.shapes.size(); ++i) {
+        const auto &shape = svgDoc.shapes[i];
+        if (shape.points.size() < 3)
+          continue;
+
+        std::vector<std::array<float, 2>> normalized;
+        normalized.reserve(shape.points.size());
+
+        for (const auto &pt : shape.points) {
+          float nx, ny;
+          if (usesNormalizedCoords) {
+            // Coordinates are already 0-1, just center them to -0.5 to 0.5
+            nx = pt[0] - 0.5f;
+            ny = -(pt[1] - 0.5f); // Flip Y
+          } else {
+            // Coordinates are absolute pixels, normalize them
+            nx = pt[0] / static_cast<float>(svgDoc.width) - 0.5f;
+            const float nyImage =
+                pt[1] / static_cast<float>(svgDoc.height) - 0.5f;
+            ny = -nyImage;
+          }
+          normalized.push_back({nx, ny});
+        }
+
+        // Calculate area to find largest shape
+        double area = 0.0;
+        for (size_t j = 0; j < normalized.size(); ++j) {
+          const auto &p1 = normalized[j];
+          const auto &p2 = normalized[(j + 1) % normalized.size()];
+          area += (p2[0] - p1[0]) * (p2[1] + p1[1]);
+        }
+        area = std::abs(area * 0.5);
+
+        if (area > largestArea) {
+          largestArea = area;
+          largestIndex = static_cast<int>(i);
+        }
+
+        data.contours.push_back(normalized);
+      }
+
+      if (largestIndex >= 0 &&
+          largestIndex < static_cast<int>(data.contours.size())) {
+        data.contour = data.contours[largestIndex];
+      } else if (!data.contours.empty()) {
+        data.contour = data.contours.front();
+      }
+
+      // Debug: print first few points of largest contour
+      if (!data.contour.empty()) {
+        std::cout << "[SketchProcessor] SVG main contour ("
+                  << data.contour.size() << " points): ";
+        size_t numToPrint = std::min(size_t(5), data.contour.size());
+        for (size_t i = 0; i < numToPrint; ++i) {
+          std::cout << "(" << data.contour[i][0] << "," << data.contour[i][1]
+                    << ") ";
+        }
+        std::cout << std::endl;
+      }
+
+      // For heightmap and profile, we still need a rasterized version
+      if (!rasterizeSvg(svgDoc, mask)) {
+        std::cerr << "[SketchProcessor] WARNING: rasterizeSvg failed!"
+                  << std::endl;
+      } else {
+        std::cout << "[SketchProcessor] Rasterized SVG to " << mask.cols << "x"
+                  << mask.rows
+                  << ", non-zero pixels: " << cv::countNonZero(mask)
+                  << std::endl;
+      }
+    } else {
       return data;
     }
-  } else {
+  }
+
+  if (!isSvg) {
     if (!loadBitmapMask(sketchPath, mask)) {
       return data;
     }
+    data.imageWidth = mask.cols;
+    data.imageHeight = mask.rows;
+    data.estimatedStroke = strokeThickness > 0.0f ? strokeThickness : 2.0f;
   }
 
-  if (mask.empty()) {
+  if (!isSvg && mask.empty()) {
     return data;
   }
-  data.imageWidth = mask.cols;
-  data.imageHeight = mask.rows;
-  data.estimatedStroke = strokeThickness > 0.0f ? strokeThickness : 2.0f;
 
-  if (strokeThickness > 0.0f) {
-    int radius =
-        std::clamp(static_cast<int>(std::round(strokeThickness)), 1, 10);
-    const int kSize = 1 + 2 * radius;
-    cv::Mat dilateKernel =
-        cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kSize, kSize));
-    cv::dilate(mask, mask, dilateKernel);
-  }
+  // If it's an SVG, and rasterization failed, or if it's a bitmap and mask is
+  // empty, return. If it's an SVG, data.imageWidth/Height/estimatedStroke are
+  // already set. If it's a bitmap, they are set above. If it's an SVG and
+  // rasterization failed, mask will be empty, and we proceed with vector data.
+  // If it's an SVG and rasterization succeeded, mask will be populated.
+  // If it's a bitmap and loadBitmapMask failed, we return above.
+  // If it's a bitmap and loadBitmapMask succeeded, mask will be populated.
 
-  cv::Mat adaptiveKernel =
-      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-  cv::Mat closed;
-  cv::morphologyEx(mask, closed, cv::MORPH_CLOSE, adaptiveKernel);
+  // The following block should only execute if mask is valid (for
+  // heightmap/profile) or if it's an SVG and we have vector data, but mask
+  // might be empty. The original code had
+  // data.imageWidth/Height/estimatedStroke set here, but for SVG, they are set
+  // earlier. For bitmap, they are set in the !isSvg block. So, these lines are
+  // removed from here.
 
-  std::vector<std::vector<cv::Point>> contours;
-  cv::findContours(closed, contours, cv::RETR_EXTERNAL,
-                   cv::CHAIN_APPROX_SIMPLE);
-
-  cv::Mat filled;
-  int largestIndex = -1;
-  double largestArea = 0.0;
-  if (!contours.empty()) {
-    filled = cv::Mat::zeros(closed.size(), CV_8UC1);
-    cv::drawContours(filled, contours, -1, cv::Scalar(255), cv::FILLED);
-    for (size_t i = 0; i < contours.size(); ++i) {
-      const double area = std::abs(cv::contourArea(contours[i]));
-      if (area > largestArea) {
-        largestArea = area;
-        largestIndex = static_cast<int>(i);
-      }
+  if (!isSvg && !mask.empty()) {
+    if (strokeThickness > 0.0f) {
+      int radius =
+          std::clamp(static_cast<int>(std::round(strokeThickness)), 1, 10);
+      const int kSize = 1 + 2 * radius;
+      cv::Mat dilateKernel =
+          cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(kSize, kSize));
+      cv::dilate(mask, mask, dilateKernel);
     }
-    data.contours.clear();
-    const double areaThreshold = std::max(100.0, largestArea * 0.05);
-    for (size_t i = 0; i < contours.size(); ++i) {
-      const double area = std::abs(cv::contourArea(contours[i]));
-      if (area < areaThreshold) {
-        continue;
-      }
-      cv::Mat componentMask = cv::Mat::zeros(closed.size(), CV_8UC1);
-      std::vector<std::vector<cv::Point>> single = {contours[i]};
-      cv::drawContours(componentMask, single, -1, cv::Scalar(255), cv::FILLED);
-      std::vector<std::vector<cv::Point>> componentContours;
-      cv::findContours(componentMask, componentContours, cv::RETR_EXTERNAL,
-                       cv::CHAIN_APPROX_SIMPLE);
-      if (componentContours.empty()) {
-        continue;
-      }
-      const auto &poly = componentContours.front();
-      std::vector<cv::Point> simplified;
-      const double epsilon = 0.003 * cv::arcLength(poly, true);
-      cv::approxPolyDP(poly, simplified, epsilon, true);
-      const auto &finalContour = simplified.empty() ? poly : simplified;
-      std::vector<std::array<float, 2>> normalized;
-      normalized.reserve(finalContour.size());
-      for (const auto &pt : finalContour) {
-        const float nx =
-            static_cast<float>(pt.x) / static_cast<float>(closed.cols) - 0.5f;
-        const float nyImage =
-            static_cast<float>(pt.y) / static_cast<float>(closed.rows) - 0.5f;
-        const float ny = -nyImage;
-        normalized.push_back({nx, ny});
-      }
-      if (!normalized.empty()) {
-        data.contours.push_back(normalized);
-        if (static_cast<int>(i) == largestIndex || data.contour.empty()) {
-          data.contour = normalized;
+
+    cv::Mat adaptiveKernel =
+        cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
+    cv::Mat closed;
+    cv::morphologyEx(mask, closed, cv::MORPH_CLOSE, adaptiveKernel);
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(closed, contours, cv::RETR_EXTERNAL,
+                     cv::CHAIN_APPROX_SIMPLE);
+
+    cv::Mat filled;
+    int largestIndex = -1;
+    double largestArea = 0.0;
+    if (!contours.empty()) {
+      filled = cv::Mat::zeros(closed.size(), CV_8UC1);
+      cv::drawContours(filled, contours, -1, cv::Scalar(255), cv::FILLED);
+      for (size_t i = 0; i < contours.size(); ++i) {
+        const double area = std::abs(cv::contourArea(contours[i]));
+        if (area > largestArea) {
+          largestArea = area;
+          largestIndex = static_cast<int>(i);
         }
       }
-    }
-    if (data.contour.empty() && !data.contours.empty()) {
-      data.contour = data.contours.front();
-    }
-  }
-
-  if (!filled.empty()) {
-    const int samples = 64;
-    const float center = 0.5f * static_cast<float>(filled.cols - 1);
-    for (int i = 0; i < samples; ++i) {
-      const float fy = static_cast<float>(i) / static_cast<float>(samples - 1);
-      const int row = std::clamp(static_cast<int>(fy * (filled.rows - 1)), 0,
-                                 filled.rows - 1);
-      const uchar *ptr = filled.ptr<uchar>(row);
-      float maxDist = 0.0f;
-      for (int col = 0; col < filled.cols; ++col) {
-        if (ptr[col] > 0) {
-          const float dist = static_cast<float>(col) - center;
-          if (dist > maxDist) {
-            maxDist = dist;
+      data.contours.clear();
+      const double areaThreshold = std::max(100.0, largestArea * 0.05);
+      for (size_t i = 0; i < contours.size(); ++i) {
+        const double area = std::abs(cv::contourArea(contours[i]));
+        if (area < areaThreshold) {
+          continue;
+        }
+        cv::Mat componentMask = cv::Mat::zeros(closed.size(), CV_8UC1);
+        std::vector<std::vector<cv::Point>> single = {contours[i]};
+        cv::drawContours(componentMask, single, -1, cv::Scalar(255),
+                         cv::FILLED);
+        std::vector<std::vector<cv::Point>> componentContours;
+        cv::findContours(componentMask, componentContours, cv::RETR_EXTERNAL,
+                         cv::CHAIN_APPROX_SIMPLE);
+        if (componentContours.empty()) {
+          continue;
+        }
+        const auto &poly = componentContours.front();
+        std::vector<cv::Point> simplified;
+        const double epsilon = 0.003 * cv::arcLength(poly, true);
+        cv::approxPolyDP(poly, simplified, epsilon, true);
+        const auto &finalContour = simplified.empty() ? poly : simplified;
+        std::vector<std::array<float, 2>> normalized;
+        normalized.reserve(finalContour.size());
+        for (const auto &pt : finalContour) {
+          const float nx =
+              static_cast<float>(pt.x) / static_cast<float>(closed.cols) - 0.5f;
+          const float nyImage =
+              static_cast<float>(pt.y) / static_cast<float>(closed.rows) - 0.5f;
+          const float ny = -nyImage;
+          normalized.push_back({nx, ny});
+        }
+        if (!normalized.empty()) {
+          data.contours.push_back(normalized);
+          if (static_cast<int>(i) == largestIndex || data.contour.empty()) {
+            data.contour = normalized;
           }
         }
       }
-      if (maxDist > 0.0f) {
-        const float radius = maxDist / static_cast<float>(filled.cols);
+      if (data.contour.empty() && !data.contours.empty()) {
+        data.contour = data.contours.front();
+      }
+
+      // Use filled for profile/heightmap
+      mask = filled;
+    }
+  }
+
+  // Build profile and heightmap from mask (works for both SVG and bitmap)
+  if (!mask.empty()) {
+    const int samples = 64;
+    const float axisNormalized = std::clamp(0.5f + axisOffsetX, 0.0f, 1.0f);
+    const float axisPixel =
+        axisNormalized * static_cast<float>(std::max(mask.cols - 1, 0));
+    const int axisCol = std::clamp(
+        static_cast<int>(std::round(axisPixel)), 0, std::max(mask.cols - 1, 0));
+    for (int i = 0; i < samples; ++i) {
+      const float fy = static_cast<float>(i) / static_cast<float>(samples - 1);
+      const int row =
+          std::clamp(static_cast<int>(fy * (mask.rows - 1)), 0, mask.rows - 1);
+      const uchar *ptr = mask.ptr<uchar>(row);
+      int leftmost = axisCol;
+      bool found = false;
+      for (int col = 0; col <= axisCol; ++col) {
+        if (ptr[col] > 0) { // take the furthest point on the left half
+          leftmost = col;
+          found = true;
+          break;
+        }
+      }
+      if (found) {
+        const float radiusPixels = axisPixel - static_cast<float>(leftmost);
+        if (radiusPixels <= 0.0f) {
+          continue;
+        }
+        const float radius = radiusPixels / static_cast<float>(mask.cols);
         const float yImage =
-            static_cast<float>(row) / static_cast<float>(filled.rows) - 0.5f;
+            static_cast<float>(row) / static_cast<float>(mask.rows) - 0.5f;
         const float y = -yImage;
         data.profile.push_back({radius, y});
       }
@@ -441,9 +991,9 @@ SketchData SketchProcessor::process(const std::string &sketchPath,
 
   const unsigned int res = 64;
   data.heightmap.assign(res * res, 0.0f);
-  if (!filled.empty()) {
+  if (!mask.empty()) {
     cv::Mat resized;
-    cv::resize(filled, resized, cv::Size(res, res), 0, 0, cv::INTER_AREA);
+    cv::resize(mask, resized, cv::Size(res, res), 0, 0, cv::INTER_AREA);
     for (unsigned int y = 0; y < res; ++y) {
       for (unsigned int x = 0; x < res; ++x) {
         const float v = static_cast<float>(resized.at<uchar>(y, x)) / 255.0f;

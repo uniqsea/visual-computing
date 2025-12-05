@@ -1,0 +1,1 @@
+Mock render for mesh with 0 vertices and resolution 1024x1024
