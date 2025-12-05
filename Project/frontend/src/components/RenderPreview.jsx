@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { fetchLatestRender } from '../services/api';
 import Viewer3D from './Viewer3D';
@@ -162,6 +162,54 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
     return () => window.removeEventListener('sketch-refresh', handler);
   }, [evaluationMode]);
 
+  const viewerProps = useMemo(
+    () =>
+      mode === 'heightmap'
+        ? { cameraPosition: [0, 2.5, 0.01], target: [0, 0, 0] }
+        : { cameraPosition: [0, 0, 2], target: [0, 0, 0] },
+    [mode]
+  );
+
+  const saveComparison = useCallback(async () => {
+    if (!evaluationMode) return;
+    const selectedFile = evaluationFiles[selectedEvalIndex];
+    if (!selectedFile?.previewUrl || !selectedFile?.resultImage) return;
+    const loadImage = (src) =>
+      new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.crossOrigin = 'anonymous';
+        img.src = src;
+      });
+    try {
+      const [inputImg, outputImg] = await Promise.all([
+        loadImage(selectedFile.previewUrl),
+        loadImage(selectedFile.resultImage)
+      ]);
+      const width = Math.max(inputImg.width, outputImg.width);
+      const height = inputImg.height + outputImg.height;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(inputImg, 0, 0, width, inputImg.height);
+      ctx.drawImage(outputImg, 0, inputImg.height, width, outputImg.height);
+      ctx.fillStyle = '#000';
+      ctx.font = '16px sans-serif';
+      ctx.fillText('Input', 8, 20);
+      ctx.fillText('Result', 8, inputImg.height + 20);
+      const link = document.createElement('a');
+      link.download = `${selectedFile.file?.name || 'comparison'}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (err) {
+      console.error('Failed to save comparison', err);
+    }
+  }, [evaluationMode, evaluationFiles, selectedEvalIndex]);
+
   if (evaluationMode) {
     const selectedFile = evaluationFiles[selectedEvalIndex];
 
@@ -216,11 +264,29 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
                 )}
 
                 {selectedFile.resultMesh ? (
-                  <Viewer3D meshUrl={selectedFile.resultMesh} />
+                  <Viewer3D meshUrl={selectedFile.resultMesh} {...viewerProps} />
                 ) : selectedFile.resultImage ? (
                   <PreviewImage src={selectedFile.resultImage} alt="Result" />
                 ) : (
                   <div style={{ color: '#666', fontSize: '0.9rem' }}>No result generated yet</div>
+                )}
+                {selectedFile.resultImage && (
+                  <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 15 }}>
+                    <button
+                      type="button"
+                      onClick={saveComparison}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        border: '1px solid #3f3f46',
+                        background: '#1f2937',
+                        color: '#e5e7eb',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Save input+result
+                    </button>
+                  </div>
                 )}
               </>
             ) : (
@@ -246,9 +312,9 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
           </HintBanner>
         </div>
       )}
-      {error && <Placeholder>{error}</Placeholder>}
+              {error && <Placeholder>{error}</Placeholder>}
       {!error && meshUrl ? (
-        <Viewer3D meshUrl={meshUrl} />
+                <Viewer3D meshUrl={meshUrl} {...viewerProps} />
       ) : (
         imageUrl && <PreviewImage src={imageUrl} alt="Rendered mesh" />
       )}

@@ -24,3 +24,5 @@ report/*.out
 report/*.toc
 
 /docs/
+
+/report/

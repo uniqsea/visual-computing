@@ -20,7 +20,7 @@ constexpr const char *kAssetsPrefix = "/api/assets/";
 }
 
 HttpServer::HttpServer(PipelineController &controller)
-    : pipeline(controller), uploadDir("backend/data/uploads") {
+    : pipeline(controller), uploadDir("data/uploads") {
   std::filesystem::create_directories(uploadDir);
 }
 

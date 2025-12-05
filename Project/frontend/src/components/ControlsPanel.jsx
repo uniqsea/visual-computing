@@ -157,50 +157,6 @@ function ControlsPanel({
     });
   };
 
-  const emitSettingsSnapshot = useCallback(() => {
-    if (!onSettingsChange) return;
-    onSettingsChange({
-      extrusion: {
-        extrusionDepth,
-        extrusionSmoothSteps,
-        sketchThickness
-      },
-      revolution: {
-        revolutionSegments,
-        revolutionCapBottom,
-        revolutionCapTop,
-        revolutionAxisOffsetX,
-        revolutionHollow,
-        revolutionWallThickness,
-        revolutionAngleDegrees
-      },
-      heightmap: {
-        heightScale,
-        heightWithBase,
-        heightBlurSigma,
-        heightResolution,
-        heightBulgeStrength
-      }
-    });
-  }, [
-    onSettingsChange,
-    extrusionDepth,
-    extrusionSmoothSteps,
-    sketchThickness,
-    revolutionSegments,
-    revolutionCapBottom,
-    revolutionCapTop,
-    revolutionAxisOffsetX,
-    revolutionHollow,
-    revolutionWallThickness,
-    revolutionAngleDegrees,
-    heightScale,
-    heightWithBase,
-    heightBlurSigma,
-    heightResolution,
-    heightBulgeStrength
-  ]);
-
   // Load settings when selection changes
   useEffect(() => {
     if (evaluationMode && evaluationFiles[selectedEvalIndex]) {
