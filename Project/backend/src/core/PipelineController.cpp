@@ -1,4 +1,5 @@
 #include "core/PipelineController.h"
+#include "core/PathUtils.h"
 #include "geometry/ExtrusionGenerator.h"
 #include "geometry/HeightMapGenerator.h"
 #include "geometry/RevolutionGenerator.h"
@@ -112,8 +113,7 @@ PipelineController::PipelineController()
     : sketchProcessor(new SketchProcessor()), extrusion(new ExtrusionGenerator()),
       revolution(new RevolutionGenerator()), heightmap(new HeightMapGenerator()),
       renderer(new OffscreenRenderer()), serializer(new MeshSerializer()) {
-  outputDir = "backend/data/outputs";
-  std::filesystem::create_directories(outputDir);
+  outputDir = sketch3d::resolveDataSubdir("outputs").string();
 }
 
 PipelineController::~PipelineController() {

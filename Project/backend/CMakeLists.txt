@@ -27,6 +27,7 @@ endif()
 
 add_library(sketch3d_backend STATIC
   src/api/HttpServer.cpp
+  src/core/PathUtils.cpp
   src/core/PipelineController.cpp
   src/sketch/SketchProcessor.cpp
   src/geometry/Mesh.cpp

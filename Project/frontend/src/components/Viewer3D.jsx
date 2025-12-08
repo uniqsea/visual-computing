@@ -56,7 +56,7 @@ function Viewer3D({ meshUrl, cameraPosition = [0, 0, 2], target = [0, 0, 0] }) {
       style={{ height: '100%', width: '100%', borderRadius: 8 }}
       camera={{ position: cameraPosition, fov: 50 }}
     >
-      <color attach="background" args={[theme.colors.surface]} />
+      <color attach="background" args={['#111']} />
       <ambientLight intensity={0.8} />
       <directionalLight position={[3, 4, 5]} intensity={1.5} />
       <gridHelper args={[10, 20, '#444', '#333']} />

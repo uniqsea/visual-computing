@@ -4,6 +4,13 @@ import { fetchLatestRender } from '../services/api';
 import Viewer3D from './Viewer3D';
 import HintBanner from './controls/HintBanner';
 
+const RUN_MODES = ['heightmap', 'extrusion', 'revolution'];
+const MODE_LABELS = {
+  heightmap: 'Height Map',
+  extrusion: 'Extrusion',
+  revolution: 'Revolution'
+};
+
 const fadeIn = keyframes`
   from { opacity: 0; }
   to { opacity: 1; }
@@ -101,6 +108,7 @@ const ThumbnailContainer = styled.div`
   cursor: pointer;
   opacity: ${(props) => (props.$active ? 1 : 0.6)};
   transition: all 0.2s;
+  flex-shrink: 0;
 
   &:hover {
     opacity: 1;
@@ -173,7 +181,8 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
   const saveComparison = useCallback(async () => {
     if (!evaluationMode) return;
     const selectedFile = evaluationFiles[selectedEvalIndex];
-    if (!selectedFile?.previewUrl || !selectedFile?.resultImage) return;
+    const modeResult = selectedFile?.results?.[mode];
+    if (!selectedFile?.previewUrl || !modeResult?.resultImage) return;
     const loadImage = (src) =>
       new Promise((resolve, reject) => {
         const img = new Image();
@@ -185,33 +194,113 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
     try {
       const [inputImg, outputImg] = await Promise.all([
         loadImage(selectedFile.previewUrl),
-        loadImage(selectedFile.resultImage)
+        loadImage(modeResult.resultImage)
       ]);
-      const width = Math.max(inputImg.width, outputImg.width);
-      const height = inputImg.height + outputImg.height;
+      const inW = inputImg.naturalWidth || inputImg.width;
+      const inH = inputImg.naturalHeight || inputImg.height;
+      const outW = outputImg.naturalWidth || outputImg.width;
+      const outH = outputImg.naturalHeight || outputImg.height;
+
+      const width = Math.max(inW, outW);
+      const inputHeight = inH * (width / inW);
+      const outputHeight = outH * (width / outW);
+
+      const height = inputHeight + outputHeight;
       const canvas = document.createElement('canvas');
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, width, height);
-      ctx.drawImage(inputImg, 0, 0, width, inputImg.height);
-      ctx.drawImage(outputImg, 0, inputImg.height, width, outputImg.height);
+      ctx.drawImage(inputImg, 0, 0, width, inputHeight);
+      ctx.drawImage(outputImg, 0, inputHeight, width, outputHeight);
       ctx.fillStyle = '#000';
       ctx.font = '16px sans-serif';
       ctx.fillText('Input', 8, 20);
-      ctx.fillText('Result', 8, inputImg.height + 20);
+      ctx.fillText('Result', 8, inputHeight + 20);
       const link = document.createElement('a');
-      link.download = `${selectedFile.file?.name || 'comparison'}.png`;
+      link.download = `${selectedFile.file?.name || 'comparison'}-${mode}.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
     } catch (err) {
       console.error('Failed to save comparison', err);
     }
+  }, [evaluationMode, evaluationFiles, selectedEvalIndex, mode]);
+
+  const saveAllModes = useCallback(async () => {
+    if (!evaluationMode) return;
+    const selectedFile = evaluationFiles[selectedEvalIndex];
+    if (!selectedFile?.previewUrl) return;
+    const segments = [{ label: 'Input', src: selectedFile.previewUrl }];
+    RUN_MODES.forEach((modeKey) => {
+      const res = selectedFile.results?.[modeKey];
+      if (res?.resultImage) {
+        segments.push({
+          label: MODE_LABELS[modeKey] || modeKey,
+          src: res.resultImage
+        });
+      }
+    });
+    if (segments.length <= 1) return;
+
+    const loadImage = (src) =>
+      new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.crossOrigin = 'anonymous';
+        img.src = src;
+      });
+
+    try {
+      const loaded = await Promise.all(segments.map((segment) => loadImage(segment.src)));
+
+      // Use natural dimensions
+      const dims = loaded.map(img => ({
+        w: img.naturalWidth || img.width,
+        h: img.naturalHeight || img.height
+      }));
+
+      const width = Math.max(...dims.map(d => d.w));
+      const labelHeight = 28;
+
+      // Calculate scaled heights
+      const scaledHeights = dims.map(d => d.h * (width / d.w));
+
+      const height =
+        scaledHeights.reduce((sum, h) => sum + h, 0) + segments.length * labelHeight;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      let offsetY = 0;
+      segments.forEach((segment, idx) => {
+        ctx.fillStyle = '#111';
+        ctx.font = '18px sans-serif';
+        ctx.fillText(segment.label, 12, offsetY + 20);
+        offsetY += labelHeight;
+        const img = loaded[idx];
+        const drawHeight = scaledHeights[idx];
+        ctx.drawImage(img, 0, offsetY, width, drawHeight);
+        offsetY += drawHeight;
+      });
+      const link = document.createElement('a');
+      link.download = `${selectedFile.file?.name || 'comparison'}-all-modes.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } catch (error) {
+      console.error('Failed to save batch comparison', error);
+    }
   }, [evaluationMode, evaluationFiles, selectedEvalIndex]);
 
   if (evaluationMode) {
     const selectedFile = evaluationFiles[selectedEvalIndex];
+    const selectedModeResult = selectedFile?.results?.[mode];
+    const hasAnyModeImages = selectedFile
+      ? RUN_MODES.some((key) => selectedFile.results?.[key]?.resultImage)
+      : false;
 
     return (
       <Wrapper>
@@ -257,35 +346,75 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
           <MainView>
             {selectedFile ? (
               <>
-                {selectedFile.status === 'running' && (
-                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', color: 'white', zIndex: 20 }}>
+                {selectedModeResult?.status === 'running' && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: 'rgba(0,0,0,0.5)',
+                      color: 'white',
+                      zIndex: 20
+                    }}
+                  >
                     Processing...
                   </div>
                 )}
 
-                {selectedFile.resultMesh ? (
-                  <Viewer3D meshUrl={selectedFile.resultMesh} {...viewerProps} />
-                ) : selectedFile.resultImage ? (
-                  <PreviewImage src={selectedFile.resultImage} alt="Result" />
+                {selectedModeResult?.resultMesh ? (
+                  <Viewer3D meshUrl={selectedModeResult.resultMesh} {...viewerProps} />
+                ) : selectedModeResult?.resultImage ? (
+                  <PreviewImage src={selectedModeResult.resultImage} alt="Result" />
                 ) : (
-                  <div style={{ color: '#666', fontSize: '0.9rem' }}>No result generated yet</div>
+                  <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                    No result generated yet
+                  </div>
                 )}
-                {selectedFile.resultImage && (
-                  <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 15 }}>
-                    <button
-                      type="button"
-                      onClick={saveComparison}
-                      style={{
-                        padding: '8px 10px',
-                        borderRadius: 6,
-                        border: '1px solid #3f3f46',
-                        background: '#1f2937',
-                        color: '#e5e7eb',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Save input+result
-                    </button>
+                {(selectedModeResult?.resultImage || hasAnyModeImages) && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      right: 12,
+                      zIndex: 15,
+                      display: 'flex',
+                      gap: 8
+                    }}
+                  >
+                    {selectedModeResult?.resultImage && (
+                      <button
+                        type="button"
+                        onClick={saveComparison}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          border: '1px solid #3f3f46',
+                          background: '#1f2937',
+                          color: '#e5e7eb',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Save input+result
+                      </button>
+                    )}
+                    {hasAnyModeImages && (
+                      <button
+                        type="button"
+                        onClick={saveAllModes}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          border: '1px solid #3f3f46',
+                          background: '#1f2937',
+                          color: '#e5e7eb',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Save all modes
+                      </button>
+                    )}
                   </div>
                 )}
               </>
@@ -312,9 +441,9 @@ function RenderPreview({ mode, evaluationMode, evaluationFiles, selectedEvalInde
           </HintBanner>
         </div>
       )}
-              {error && <Placeholder>{error}</Placeholder>}
+      {error && <Placeholder>{error}</Placeholder>}
       {!error && meshUrl ? (
-                <Viewer3D meshUrl={meshUrl} {...viewerProps} />
+        <Viewer3D meshUrl={meshUrl} {...viewerProps} />
       ) : (
         imageUrl && <PreviewImage src={imageUrl} alt="Rendered mesh" />
       )}

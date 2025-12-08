@@ -12,6 +12,20 @@ import ExtrusionControls from './controls/ExtrusionControls';
 import RevolutionControls from './controls/RevolutionControls';
 import HeightMapControls from './controls/HeightMapControls';
 
+const RUN_MODES = ['heightmap', 'extrusion', 'revolution'];
+
+const createEmptyResults = () => ({
+  heightmap: { status: 'pending' },
+  extrusion: { status: 'pending' },
+  revolution: { status: 'pending' }
+});
+
+const cloneSettings = (settings = {}) => ({
+  extrusion: { ...(settings.extrusion || {}) },
+  revolution: { ...(settings.revolution || {}) },
+  heightmap: { ...(settings.heightmap || {}) }
+});
+
 const Container = styled.div`
   display: flex;
   flex-direction: column;
@@ -73,6 +87,43 @@ const StatusMessage = styled.p`
   margin-top: 8px;
 `;
 
+const BatchCard = styled.div`
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid ${(props) => props.theme.colors.border};
+  background: #1f1f23;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const InlineActions = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+`;
+
+const SecondaryButton = styled.button`
+  padding: 10px 12px;
+  border-radius: ${(props) => props.theme.radii.sm};
+  border: 1px solid ${(props) => props.theme.colors.border};
+  background: transparent;
+  color: ${(props) => props.theme.colors.text};
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
+const ProgressText = styled.div`
+  font-size: 0.85rem;
+  color: #a1a1aa;
+`;
+
 function ControlsPanel({
   mode, setMode,
   evaluationMode, setEvaluationMode,
@@ -109,6 +160,13 @@ function ControlsPanel({
   const [heightBulgeStrength, setHeightBulgeStrength] = useState(0);
 
   const [evaluationLog, setEvaluationLog] = useState([]);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchProgress, setBatchProgress] = useState({
+    completed: 0,
+    total: 0,
+    label: ''
+  });
+  const [batchLogs, setBatchLogs] = useState([]);
 
   const updatePreviewUrl = (nextUrl) => {
     setPreviewUrl((prev) => {
@@ -156,6 +214,171 @@ function ControlsPanel({
       return next;
     });
   };
+
+  const updateEntryResult = useCallback(
+    (index, modeKey, updates) => {
+      setEvaluationFiles((prev) =>
+        prev.map((entry, idx) => {
+          if (idx !== index) return entry;
+          const baseResults = entry.results ? { ...entry.results } : createEmptyResults();
+          const previous = baseResults[modeKey] || { status: 'pending' };
+          baseResults[modeKey] = { ...previous, ...updates };
+          return { ...entry, results: baseResults };
+        })
+      );
+    },
+    [setEvaluationFiles]
+  );
+
+  const runEvaluationForEntry = useCallback(
+    async (entryIndex, overrideMode) => {
+      const entry = evaluationFiles[entryIndex];
+      if (!entry?.file) {
+        return null;
+      }
+      const targetMode = overrideMode || mode;
+      const storedSettings = entry.settings
+        ? cloneSettings(entry.settings)
+        : cloneSettings(getEvaluationSettings());
+      const modeSettings = storedSettings[targetMode] || {};
+
+      updateEntryResult(entryIndex, targetMode, {
+        status: 'running',
+        error: null,
+        startedAt: new Date().toISOString()
+      });
+
+      const startTime = performance.now();
+      try {
+        const response = await uploadSketch(entry.file, targetMode, modeSettings);
+        const durationMs = Math.round(performance.now() - startTime);
+        updateEntryResult(entryIndex, targetMode, {
+          status: 'done',
+          resultMesh: response.mesh,
+          resultImage: response.image,
+          token: response.token,
+          durationMs,
+          completedAt: new Date().toISOString(),
+          settings: modeSettings
+        });
+        setEvaluationFiles((prev) =>
+          prev.map((item, idx) =>
+            idx === entryIndex ? { ...item, settings: storedSettings } : item
+          )
+        );
+        return {
+          success: true,
+          fileName: entry.file.name,
+          mode: targetMode,
+          durationMs,
+          mesh: response.mesh,
+          image: response.image,
+          token: response.token
+        };
+      } catch (error) {
+        console.error(error);
+        updateEntryResult(entryIndex, targetMode, {
+          status: 'error',
+          error: error?.message || 'Processing failed'
+        });
+        return {
+          success: false,
+          fileName: entry.file.name,
+          mode: targetMode,
+          error: error?.message || 'Processing failed'
+        };
+      }
+    },
+    [evaluationFiles, mode, updateEntryResult, setEvaluationFiles] // getEvaluationSettings is defined later; avoid reference cycle
+  );
+
+  const handleBatchRun = useCallback(async () => {
+    if (batchRunning || evaluationFiles.length === 0) return;
+    const totalSteps = evaluationFiles.length * RUN_MODES.length;
+    if (totalSteps === 0) return;
+    setBatchRunning(true);
+    setBatchLogs([]);
+    setBatchProgress({
+      completed: 0,
+      total: totalSteps,
+      label: 'Starting batch evaluation...'
+    });
+
+    let completed = 0;
+    for (let fileIdx = 0; fileIdx < evaluationFiles.length; fileIdx += 1) {
+      const entry = evaluationFiles[fileIdx];
+      const fileLabel = entry?.file?.name || `Sketch ${fileIdx + 1}`;
+      for (const modeKey of RUN_MODES) {
+        setBatchProgress({
+          completed,
+          total: totalSteps,
+          label: `Processing ${fileLabel} (${modeKey})`
+        });
+        const record =
+          (await runEvaluationForEntry(fileIdx, modeKey)) ||
+          {
+            success: false,
+            fileName: fileLabel,
+            mode: modeKey,
+            error: 'Skipped'
+          };
+        completed += 1;
+        setBatchLogs((prev) => [...prev, record]);
+        setBatchProgress({
+          completed,
+          total: totalSteps,
+          label: `Completed ${fileLabel} (${modeKey})`
+        });
+      }
+    }
+    setBatchProgress({
+      completed: totalSteps,
+      total: totalSteps,
+      label: 'Batch evaluation finished'
+    });
+    setBatchRunning(false);
+  }, [batchRunning, evaluationFiles, runEvaluationForEntry]);
+
+  const downloadCsvReport = useCallback(() => {
+    const rows = [
+      ['file', 'mode', 'status', 'image', 'mesh', 'token', 'duration_ms', 'error']
+    ];
+    evaluationFiles.forEach((entry) => {
+      RUN_MODES.forEach((modeKey) => {
+        const res = entry.results?.[modeKey];
+        if (!res) return;
+        rows.push([
+          entry.file?.name || '',
+          modeKey,
+          res.status || 'pending',
+          res.resultImage || '',
+          res.resultMesh || '',
+          res.token || '',
+          res.durationMs ?? '',
+          res.error || ''
+        ]);
+      });
+    });
+    if (rows.length <= 1) {
+      return;
+    }
+    const csvText = rows
+      .map((row) =>
+        row
+          .map((value) => `"${String(value ?? '').replace(/"/g, '""')}"`)
+          .join(',')
+      )
+      .join('\n');
+    const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sketch3d-evaluation-${Date.now()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [evaluationFiles]);
 
   // Load settings when selection changes
   useEffect(() => {
@@ -237,7 +460,7 @@ function ControlsPanel({
         if (JSON.stringify(next[selectedEvalIndex].settings) !== JSON.stringify(currentSettings)) {
           next[selectedEvalIndex] = {
             ...next[selectedEvalIndex],
-            settings: currentSettings
+            settings: cloneSettings(currentSettings)
           };
           return next;
         }
@@ -270,29 +493,31 @@ function ControlsPanel({
     emitSettingsSnapshot();
   }, [emitSettingsSnapshot]);
 
-  const getEvaluationSettings = useCallback(() => ({
-    extrusion: {
-      extrusionDepth,
-      extrusionSmoothSteps,
-      sketchThickness
-    },
-    revolution: {
-      revolutionSegments,
-      revolutionCapBottom,
-      revolutionCapTop,
-      revolutionAxisOffsetX,
-      revolutionHollow,
-      revolutionWallThickness,
-      revolutionAngleDegrees
-    },
-    heightmap: {
-      heightScale,
-      heightWithBase,
-      heightBlurSigma,
-      heightResolution,
-      heightBulgeStrength
-    }
-  }), [
+  const getEvaluationSettings = useCallback(() => {
+    return {
+      extrusion: {
+        extrusionDepth,
+        extrusionSmoothSteps,
+        sketchThickness
+      },
+      revolution: {
+        revolutionSegments,
+        revolutionCapBottom,
+        revolutionCapTop,
+        revolutionAxisOffsetX,
+        revolutionHollow,
+        revolutionWallThickness,
+        revolutionAngleDegrees
+      },
+      heightmap: {
+        heightScale,
+        heightWithBase,
+        heightBlurSigma,
+        heightResolution,
+        heightBulgeStrength
+      }
+    };
+  }, [
     extrusionDepth,
     extrusionSmoothSteps,
     sketchThickness,
@@ -427,6 +652,19 @@ function ControlsPanel({
     }
   };
 
+  const totalBatchJobs = evaluationFiles.length * RUN_MODES.length;
+  const completedBatchJobs = evaluationFiles.reduce((sum, entry) => {
+    if (!entry?.results) return sum;
+    return (
+      sum +
+      RUN_MODES.reduce(
+        (inner, modeKey) => inner + (entry.results[modeKey]?.status === 'done' ? 1 : 0),
+        0
+      )
+    );
+  }, 0);
+  const hasResultData = completedBatchJobs > 0;
+
   return (
     <Container>
       <Navbar
@@ -545,16 +783,19 @@ function ControlsPanel({
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   const files = Array.from(e.target.files || []);
+                  const template = getEvaluationSettings();
                   const newEntries = files.map(f => ({
                     file: f,
                     previewUrl: URL.createObjectURL(f),
-                    status: 'pending',
-                    settings: { ...getEvaluationSettings() } // Default to current settings
+                    results: createEmptyResults(),
+                    settings: cloneSettings(template)
                   }));
                   setEvaluationFiles(prev => [...prev, ...newEntries]);
                 }}
               />
             </div>
+
+
 
             {evaluationFiles[selectedEvalIndex] ? (
               <>
@@ -592,41 +833,31 @@ function ControlsPanel({
                   />
                 )}
 
-                <Button onClick={async () => {
-                  const idx = selectedEvalIndex;
-                  const entry = evaluationFiles[idx];
-                  if (!entry) return;
+                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {batchProgress.label && (
+                    <div style={{ fontSize: '0.8rem', color: '#a1a1aa', textAlign: 'center' }}>
+                      {batchProgress.label} ({completedBatchJobs}/{totalBatchJobs})
+                    </div>
+                  )}
 
-                  // Update status to running
-                  setEvaluationFiles(prev => prev.map((item, i) => i === idx ? { ...item, status: 'running' } : item));
+                  <Button
+                    onClick={handleBatchRun}
+                    disabled={batchRunning || evaluationFiles.length === 0}
+                    style={{ opacity: batchRunning ? 0.7 : 1 }}
+                  >
+                    <Upload size={18} />
+                    {batchRunning ? 'Running Batch...' : 'Run All (3 Modes)'}
+                  </Button>
 
-                  try {
-                    const currentSettings = {
-                      extrusion: { extrusionDepth, extrusionSmoothSteps, sketchThickness },
-                      revolution: { revolutionSegments, revolutionCapBottom, revolutionCapTop, revolutionAxisOffsetX, revolutionHollow, revolutionWallThickness, revolutionAngleDegrees },
-                      heightmap: { heightScale, heightWithBase, heightBlurSigma, heightResolution, heightBulgeStrength }
-                    };
-
-                    // Use the specific mode settings
-                    const modeSettings = currentSettings[mode];
-
-                    const result = await uploadSketch(entry.file, mode, modeSettings);
-
-                    setEvaluationFiles(prev => prev.map((item, i) => i === idx ? {
-                      ...item,
-                      status: 'done',
-                      resultMesh: result.mesh,
-                      resultImage: result.image,
-                      settings: currentSettings
-                    } : item));
-                  } catch (err) {
-                    console.error(err);
-                    setEvaluationFiles(prev => prev.map((item, i) => i === idx ? { ...item, status: 'error' } : item));
-                  }
-                }}>
-                  <Upload size={18} />
-                  Run Evaluation
-                </Button>
+                  <SecondaryButton
+                    type="button"
+                    disabled={!hasResultData}
+                    onClick={downloadCsvReport}
+                    style={{ width: '100%', justifyContent: 'center', display: 'flex' }}
+                  >
+                    Download CSV Report
+                  </SecondaryButton>
+                </div>
               </>
             ) : (
               <div style={{ color: '#666', textAlign: 'center', marginTop: 20 }}>

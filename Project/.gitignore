@@ -26,3 +26,7 @@ report/*.toc
 /docs/
 
 /report/
+
+/data/
+
+/backend/data/

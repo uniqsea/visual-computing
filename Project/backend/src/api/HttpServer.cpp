@@ -1,4 +1,5 @@
 #include "api/HttpServer.h"
+#include "core/PathUtils.h"
 #include "sketch/SketchProcessor.h"
 #include <algorithm>
 #include <arpa/inet.h>
@@ -20,8 +21,8 @@ constexpr const char *kAssetsPrefix = "/api/assets/";
 }
 
 HttpServer::HttpServer(PipelineController &controller)
-    : pipeline(controller), uploadDir("data/uploads") {
-  std::filesystem::create_directories(uploadDir);
+    : pipeline(controller),
+      uploadDir(sketch3d::resolveDataSubdir("uploads").string()) {
 }
 
 void HttpServer::start(int port) {
