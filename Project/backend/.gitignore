@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Backend build artifacts
+/backend/build/
+/backend/CMakeFiles/
+backend/CMakeCache.txt
+backend/cmake_install.cmake
+backend/compile_commands.json
+backend/Makefile
+
+# Frontend artifacts
+/frontend/node_modules/
+/frontend/dist/
+
+# LaTeX artifacts
+report/*.aux
+report/*.bbl
+report/*.blg
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.out
+report/*.toc
+
+/docs/
+
+/report/
+
+/data/
+
+/backend/data/
